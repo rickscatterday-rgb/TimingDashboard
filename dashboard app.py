@@ -146,4 +146,14 @@ def main():
         st.write("**INTELLIGENCE LEDGER (THE LOGIC)**")
         l, r = st.columns(2)
         with l:
-            st.write("**Yield Curve (Macro):** 100%
+            st.write("**Yield Curve (Macro):** 100% = Healthy expansion. 0% = 'The Trap' (curve re-steepening after inversion, 6-month recession lag).")
+            st.write("**Sector Breadth (Intermediate):** Measures the internal engine. 100% means all 11 sectors are trending higher. 0% means internal rot.")
+            st.write("**VIX Snapback (Tactical):** 100% = Panic peak (High probability buy). 0% = Extreme complacency (High risk of pull-back).")
+        with r:
+            st.write("**Credit Canary (Macro):** Measures Risk-Appetite. 100% means Junk Bonds are outperforming Treasuries (Bullish).")
+            st.write("**DeMark Exhaustion (Tactical):** 100% means 9 days of downside exhaustion (Oversold). 0% means upside exhaustion (Overbought).")
+            st.write("**Global Trend (Macro):** The primary filter. 100% if the S&P 500 is in a long-term uptrend (above 200-MA).")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
