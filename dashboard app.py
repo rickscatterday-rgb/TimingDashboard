@@ -3,215 +3,183 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# --- 1. TERMINAL UI CONFIGURATION ---
-st.set_page_config(page_title="ALPHA TERMINAL v4.5", layout="wide", initial_sidebar_state="collapsed")
+# --- 1. TERMINAL THEME SETUP ---
+st.set_page_config(page_title="ALPHA TERMINAL v4.7", layout="wide")
 
-def apply_custom_style():
-    st.markdown("""
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;500;700&display=swap');
-        
-        :root {
-            --bg-color: #05070a;
-            --card-bg: #0d1117;
-            --text-main: #e6edf3;
-            --accent-blue: #58a6ff;
-            --accent-green: #3fb950;
-            --accent-red: #f85149;
-            --border-color: #30363d;
-        }
-
-        .stApp { background-color: var(--bg-color); color: var(--text-main); }
-        .data-font { font-family: 'Fira Code', monospace !important; }
-        
-        /* Terminal Metric Cards */
-        .metric-card {
-            background-color: var(--card-bg);
-            border: 1px solid var(--border-color);
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 10px;
-        }
-        
-        .status-pulse {
-            display: inline-block;
-            width: 10px; height: 10px;
-            background-color: var(--accent-green);
-            border-radius: 50%;
-            margin-right: 8px;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(63, 185, 80, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
-        }
-
-        h1, h2, h3 { font-family: 'Fira Code', monospace !important; text-transform: uppercase; letter-spacing: 2px; }
-        .stExpander { border: 1px solid var(--border-color) !important; background: transparent !important; }
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown("""
+<style>
+    html, body, [class*="st-"] { font-family: 'Courier New', Courier, monospace !important; }
+    .main { background-color: #0d1117; color: #c9d1d9; }
+    .metric-container {
+        border: 1px solid #30363d;
+        padding: 20px;
+        background-color: #161b22;
+        margin-bottom: 20px;
+    }
+    .logic-box {
+        background-color: #0d1117;
+        border-left: 3px solid #58a6ff;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    .signal-buy { color: #39d353; font-weight: bold; }
+    .signal-sell { color: #f85149; font-weight: bold; }
+    .progress-bg { background-color: #30363d; width: 100%; height: 12px; border-radius: 2px; }
+</style>
+""", unsafe_allow_html=True)
 
 # --- 2. DATA ENGINE ---
 @st.cache_data(ttl=3600)
-def fetch_market_data():
+def fetch_alpha_data():
     tks = ['SPY', '^VIX', 'HYG', 'IEF', 'XLY', 'XLP', 'XLE', 'XLF', 'XLV', 'XLI', 'XLB', 'XLK', 'XLU', 'XLC', 'XLRE']
     try:
-        data = yf.download(tks, period="2y", interval="1d", progress=False, auto_adjust=True)
-        return data['Close']
-    except Exception as e:
-        st.error(f"DATA_SYNC_ERROR: {e}")
-        return None
+        df = yf.download(tks, period="400d", interval="1d", progress=False, auto_adjust=True)
+        return df['Close'] if not df.empty else None
+    except: return None
 
-def get_macro_spread():
+def get_yc_analysis():
     try:
-        # T10Y2Y from FRED
-        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y"
-        df = pd.read_csv(url)
-        df['value'] = pd.to_numeric(df['value'], errors='coerce')
-        df = df.dropna()
-        curr = df['value'].iloc[-1]
-        
-        # Logic: Recession risk is highest when curve DE-INVERTS (crosses back above 0)
-        was_inverted = (df['value'].tail(252) < 0).any()
-        if curr > 0 and was_inverted: score = 20  # Danger zone: Re-steepening
-        elif curr < 0: score = 50 + (abs(curr) * 10) # Early inversion is "calm"
-        else: score = 90 # Healthy slope
-        return min(100, score), curr
-    except:
-        return 50, 0.0
+        df = pd.read_csv("https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y")
+        df.columns = ['date', 'value']; df['value'] = pd.to_numeric(df['value'], errors='coerce')
+        df = df.dropna(); curr = float(df['value'].iloc[-1]); was_inv = (df['value'].tail(180) < 0).any()
+        if curr > 0 and was_inv: s = 10 # Trap
+        elif curr < 0: s = 40 + (curr + 1.0) * 20 # Deep inversion vs shallow
+        else: s = min(100, 60 + (curr * 50))
+        return s, curr
+    except: return 50, 0.0
 
-# --- 3. THE ANALYTICS ENGINE ---
-def run_alpha_model():
-    prices = fetch_market_data()
+# --- 3. ANALYTICS ENGINE ---
+def run_model():
+    prices = fetch_alpha_data()
     if prices is None: return None
+    spy = prices['SPY'].dropna(); spy_px = float(spy.iloc[-1])
     
-    spy = prices['SPY'].dropna()
-    spy_last = spy.iloc[-1]
+    # 1. Trend (200MA)
+    ma200 = float(spy.rolling(200).mean().iloc[-1])
+    dist = (spy_px - ma200) / ma200
+    tr_p = min(100, max(0, 50 + (dist * 1000)))
     
-    # 1. TREND: Distance from 200DMA (Bullish > 0)
-    ma200 = spy.rolling(200).mean().iloc[-1]
-    dist_200 = (spy_last - ma200) / ma200
-    tr_score = min(100, max(0, 50 + (dist_200 * 500)))
-
-    # 2. CREDIT: Risk Appetite (HYG/IEF Ratio)
-    credit_ratio = (prices['HYG'] / prices['IEF']).dropna()
-    cr_ma = credit_ratio.rolling(50).mean().iloc[-1]
-    cr_score = 100 if credit_ratio.iloc[-1] > cr_ma else 30
-
-    # 3. BREADTH: % of Sectors > 200DMA
+    # 2. Credit (HYG/IEF)
+    ratio = (prices['HYG'].dropna() / prices['IEF'].dropna())
+    r_ma = ratio.rolling(50).mean().iloc[-1]
+    r_dist = (ratio.iloc[-1] - r_ma) / r_ma
+    cr_p = min(100, max(0, 50 + (r_dist * 2000)))
+    
+    # 3. Breadth
     secs = ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE']
-    above_count = 0
+    above = 0
     for s in secs:
-        s_px = prices[s].dropna()
-        if s_px.iloc[-1] > s_px.rolling(200).mean().iloc[-1]: above_count += 1
-    br_score = (above_count / 11) * 100
-
-    # 4. VOLATILITY: VIX Mean Reversion
-    vix = prices['^VIX'].dropna()
-    v_curr = vix.iloc[-1]
-    # Score 100 when VIX is high (Buying opportunity), 0 when VIX is crushed (Complacency)
-    v_rank = (v_curr - vix.min()) / (vix.max() - vix.min())
-    vx_score = v_rank * 100
-
-    # 5. MOMENTUM: DeMark-ish Exhaustion
-    dm = (spy > spy.shift(4)).astype(int)
-    current_state = dm.iloc[-1]
-    count = 0
-    for val in reversed(dm.tolist()):
-        if val == current_state: count += 1
-        else: break
-    # High count in uptrend = Exhaustion (Low Score)
-    ex_score = 100 - (count * 10) if current_state == 1 else (count * 10)
-
-    # 6. MACRO: Yield Curve
-    yc_score, yc_val = get_macro_spread()
-
-    # AGGREGATION
-    weights = [0.25, 0.15, 0.20, 0.10, 0.10, 0.20]
-    scores = [tr_score, cr_score, br_score, vx_score, ex_score, yc_score]
-    final_avg = sum(s * w for s, w in zip(scores, weights))
+        p = prices[s].dropna()
+        if not p.empty and p.iloc[-1] > p.rolling(200).mean().iloc[-1]: above += 1
+    br_p = (above / 11) * 100
     
-    # Regime Classification
-    if final_avg > 70: regime = "AGGRESSIVE EXPANSION"
-    elif final_avg > 50: regime = "CAUTIOUS BULL"
-    elif final_avg > 35: regime = "DEFENSIVE / HEDGED"
-    else: regime = "CAPITAL PRESERVATION"
+    # 4. VIX Position
+    vix = prices['^VIX'].dropna(); v_px = float(vix.iloc[-1])
+    v_ma = vix.rolling(20).mean().iloc[-1]; v_std = vix.rolling(20).std().iloc[-1]
+    v_u = v_ma + (1.5 * v_std); v_l = v_ma - (1.5 * v_std)
+    vx_p = min(100, max(0, ((v_px - v_l) / (v_u - v_l)) * 100))
 
+    # 5. Exhaustion
+    dm = (spy > spy.shift(4)).astype(int); lv = int(dm.iloc[-1]); c = 0
+    for val in reversed(dm.tolist()):
+        if val == lv: c += 1
+        else: break
+    dm_p = (c / 9 * 100) if lv == 0 else (100 - (c / 9 * 100))
+    
+    yc_p, yc_v = get_yc_analysis()
+    avg = (tr_p + cr_p + br_p + vx_p + dm_p + yc_p) / 6
+    alloc = 100 if avg >= 80 else (75 if avg >= 60 else (50 if avg >= 40 else 20))
+    
     return {
-        "avg": final_avg, "regime": regime, "yc_v": yc_val, "br_c": above_count,
+        "alloc": alloc, "avg": avg, "yc_v": yc_v, "c": c, "lv": lv,
         "metrics": [
-            ("Trend Alignment", tr_score, f"SPY vs 200MA: {dist_200:+.2%}"),
-            ("Credit Signal", cr_score, "Junk/Treasury Ratio"),
-            ("Market Breadth", br_score, f"{above_count}/11 Sectors Bullish"),
-            ("Volatility Index", vx_score, f"VIX Spot: {v_curr:.2f}"),
-            ("Trend Exhaustion", ex_score, f"{count}-Day Sequential {'High' if current_state==1 else 'Low'}"),
-            ("Macro Spread", yc_score, f"10Y-2Y: {yc_val:.2f}%")
+            ("Macro: Yield Curve", f"{yc_v:.2f}% Spread", yc_p),
+            ("Trend: 200MA Prox", f"{dist:+.2%}", tr_p),
+            ("Credit: Risk Ratio", "HYG/IEF", cr_p),
+            ("Breadth: Sectors", f"{above}/11 Bullish", br_p),
+            ("Tactical: VIX Band", f"Spot: {v_px:.1f}", vx_p),
+            ("Tactical: Exhaust", f"Count: {c}/9", dm_p)
         ]
     }
 
-# --- 4. DISPLAY INTERFACE ---
+# --- 4. DISPLAY ---
 def main():
-    apply_custom_style()
-    
-    # Header
-    cols = st.columns([2, 1])
-    with cols[0]:
-        st.markdown(f"<h1><span class='status-pulse'></span>ALPHA TERMINAL v4.5</h1>", unsafe_allow_html=True)
-        st.caption(f"SYSTEM STATUS: ONLINE // LAST SCAN: {datetime.now().strftime('%H:%M:%S')} // DATA: REALTIME_L1")
-    
-    data = run_alpha_model()
-    if not data:
-        st.warning("WAITING FOR DATA LINK...")
-        return
+    st.write(f"## ALPHA TERMINAL v4.7 // {datetime.now().strftime('%H:%M:%S')}")
+    d = run_model()
+    if d is None: st.error("SYNC FAILED"); return
 
-    # Top Row Metrics
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        st.markdown(f"<div class='metric-card'><small>SYSTEM AGGREGATE</small><h2>{data['avg']:.1f}%</h2></div>", unsafe_allow_html=True)
-    with m2:
-        st.markdown(f"<div class='metric-card'><small>MARKET REGIME</small><h2>{data['regime']}</h2></div>", unsafe_allow_html=True)
-    with m3:
-        alloc = "100%" if data['avg'] > 75 else "75%" if data['avg'] > 60 else "25%" if data['avg'] > 40 else "CASH"
-        st.markdown(f"<div class='metric-card'><small>SUGGESTED ALLOCATION</small><h2>{alloc}</h2></div>", unsafe_allow_html=True)
-
-    # Main Visualization
-    fig = go.Figure(go.Bar(
-        x=[x[1] for x in data['metrics']],
-        y=[x[0] for x in data['metrics']],
-        orientation='h',
-        marker=dict(color=['#58a6ff' if x[1] > 50 else '#f85149' for x in data['metrics']])
-    ))
-    fig.update_layout(
-        height=300, margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#e6edf3', family='Fira Code'),
-        xaxis=dict(range=[0, 100], gridcolor='#30363d'),
-        yaxis=dict(gridcolor='#30363d')
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Detailed Ledger
-    st.markdown("### STRENGTH LEDGER")
-    for label, score, detail in data['metrics']:
-        c1, c2, c3 = st.columns([1, 2, 1])
-        c1.markdown(f"<p class='data-font'>{label}</p>", unsafe_allow_html=True)
-        
-        # Custom Progress Bar
-        color = "#3fb950" if score > 60 else "#f85149" if score < 40 else "#d29922"
-        bar_html = f"""
-        <div style="background-color: #30363d; width: 100%; height: 12px; margin-top: 5px; border-radius: 2px;">
-            <div style="background-color: {color}; width: {score}%; height: 12px; border-radius: 2px;"></div>
+    # TOP DASHBOARD
+    c_left, c_right = st.columns([1, 1])
+    with c_left:
+        st.markdown(f"""
+        <div class="metric-container">
+            <p style="color:#8b949e;">AGGREGATE SIGNAL STRENGTH</p>
+            <h1 style="color:#58a6ff; font-size:48px; margin:0;">{d['avg']:.1f}%</h1>
+            <p style="margin-top:15px;">RECOMMENDED ALLOCATION: <span style="color:#39d353;">{d['alloc']}% EQUITY</span></p>
         </div>
-        """
-        c2.markdown(bar_html, unsafe_allow_html=True)
-        c3.markdown(f"<p class='data-font' style='text-align:right;'>{detail}</p>", unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    with c_right:
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=d['avg'], gauge={'axis':{'range':[0,100]}, 'bar':{'color':"#58a6ff"}, 'bgcolor':"#161b22"}))
+        fig.update_layout(height=220, margin=dict(l=20,r=20,t=30,b=20), paper_bgcolor='rgba(0,0,0,0)', font={'color': "#8b949e"})
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("---")
-    st.caption("DISCLAIMER: ALPHA TERMINAL provides algorithmic analysis based on linear price action. No financial advice intended.")
+    # LEDGER SECTION
+    st.write("### STRENGTH LEDGER")
+    for label, reading, pct in d['metrics']:
+        col1, col2, col3 = st.columns([1, 1, 2])
+        col1.write(f"**{label}**")
+        col2.write(reading)
+        color = "#39d353" if pct >= 70 else "#f85149" if pct <= 30 else "#e3b341"
+        bar_html = f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:12px; border-radius:2px;"></div></div>'
+        col3.markdown(bar_html, unsafe_allow_html=True)
+
+    # --- 5. SIGNAL INTELLIGENCE DICTIONARY (THE EXPLANATIONS) ---
+    st.write("---")
+    st.write("### 🧠 SIGNAL INTELLIGENCE DICTIONARY")
+    
+    dict_cols = st.columns(2)
+    
+    with dict_cols[0]:
+        st.markdown("""
+        <div class="logic-box">
+            <p><b>1. Yield Curve (Macro)</b></p>
+            <span class="signal-buy">BUY:</span> Curve is "Normal" (Positive > 0.5) OR deeply inverted (-1.0).<br>
+            <span class="signal-sell">SELL:</span> "The Trap." When the curve crosses from Negative back to Positive (0.0). This precedes 90% of recessions.
+        </div>
+        <div class="logic-box">
+            <p><b>2. Trend Proximity (Momentum)</b></p>
+            <span class="signal-buy">BUY:</span> Price is > 5% above the 200-Day Moving Average (Structural Uptrend).<br>
+            <span class="signal-sell">SELL:</span> Price drops below the 200MA. Historically, the worst market crashes occur only while below the 200MA.
+        </div>
+        <div class="logic-box">
+            <p><b>3. Credit Canary (Risk-On/Off)</b></p>
+            <span class="signal-buy">BUY:</span> HYG (Junk Bonds) outperforming IEF (Treasuries). Indicates big institutions are taking risks.<br>
+            <span class="signal-sell">SELL:</span> Treasuries outperforming Junk bonds. Indicates "Flight to Safety" liquidity flows.
+        </div>
+        """, unsafe_allow_html=True)
+
+    with dict_cols[1]:
+        st.markdown("""
+        <div class="logic-box">
+            <p><b>4. Sector Breadth (Internal Health)</b></p>
+            <span class="signal-buy">BUY:</span> > 8/11 sectors are above their 200MA. High participation confirms a healthy rally.<br>
+            <span class="signal-sell">SELL:</span> < 4/11 sectors are positive. Indicates "Narrow Leadership" where only a few stocks prop up the index.
+        </div>
+        <div class="logic-box">
+            <p><b>5. Volatility Position (Sentiment)</b></p>
+            <span class="signal-buy">BUY:</span> VIX hits the Upper Bollinger Band (Extreme Fear). Markets usually bottom when fear peaks.<br>
+            <span class="signal-sell">SELL:</span> VIX hits the Lower Bollinger Band (Complacency). Risk is highest when everything feels safe.
+        </div>
+        <div class="logic-box">
+            <p><b>6. Exhaustion Count (Timing)</b></p>
+            <span class="signal-buy">BUY:</span> Downside 9-Count. Indicates sellers are exhausted; a relief rally or reversal is statistically probable.<br>
+            <span class="signal-sell">SELL:</span> Upside 9-Count. Indicates "FOMO" buying is exhausted; market is likely "overbought" and needs to cool.
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.caption(f"ALPHA TERMINAL v4.7 // AGGREGATE MODEL WEIGHTING: EQUAL-WEIGHT LINEAR RANK // REFRESH TO SYNC")
 
 if __name__ == "__main__":
     main()
