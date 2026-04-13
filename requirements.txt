@@ -1,5 +1,5 @@
 streamlit
-yfinance==0.2.4
+yfinance>=0.2.51
 pandas
 plotly
 requests
