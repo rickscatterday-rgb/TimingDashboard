@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- 1. TERMINAL THEME SETUP ---
-st.set_page_config(page_title="ALPHA TERMINAL v5.3", layout="wide")
+st.set_page_config(page_title="ALPHA TERMINAL v5.4", layout="wide")
 
 st.markdown("""
 <style>
@@ -34,17 +34,23 @@ st.markdown("""
     .status-no-trade { background-color: #3e1b1b; color: #f85149; border-color: #f85149; }
     .status-sell-premium { background-color: #1b2e3e; color: #58a6ff; border-color: #58a6ff; }
     .status-wait { background-color: #21262d; color: #8b949e; border-color: #30363d; }
-    .logic-box { background-color: #161b22; border-left: 3px solid #58a6ff; padding: 15px; margin: 10px 0; font-size: 0.85em; }
-    .progress-bg { background-color: #30363d; width: 100%; height: 14px; border-radius: 2px; }
+    .logic-box { 
+        background-color: #161b22; 
+        border-left: 3px solid #58a6ff; 
+        padding: 15px; 
+        margin: 10px 0; 
+        font-size: 0.85em;
+        line-height: 1.4;
+    }
     .signal-buy { color: #39d353; font-weight: bold; }
     .signal-sell { color: #f85149; font-weight: bold; }
+    .progress-bg { background-color: #30363d; width: 100%; height: 14px; border-radius: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. ECONOMIC NEWS ENGINE ---
 def get_red_folder_events():
     now = datetime.now(pytz.timezone('US/Eastern'))
-    # Static schedule for demonstration - in production, this would pull from an API
     events = [
         {"event": "FOMC Interest Rate Decision", "date": (now + timedelta(hours=4)).replace(minute=0)},
         {"event": "CPI Inflation Data", "date": (now + timedelta(hours=18)).replace(minute=30)},
@@ -151,11 +157,11 @@ def run_model():
 
 # --- 5. DISPLAY ---
 def main():
-    st.write(f"## ALPHA TERMINAL v5.3 // {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.write(f"## ALPHA TERMINAL v5.4 // {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     d = run_model()
     if d is None: return
 
-    # TOP ROW
+    # TOP DASHBOARD
     c_news, c_action, c_gauge = st.columns([1, 1.2, 1])
     with c_news:
         st.write("### 🚨 RED FOLDER NEWS")
@@ -180,18 +186,55 @@ def main():
         color = "#39d353" if pct >= 70 else "#f85149" if pct <= 30 else "#e3b341"
         col3.markdown(f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:14px; border-radius:2px;"></div></div>', unsafe_allow_html=True)
 
+    # --- RESTORED SIGNAL INTELLIGENCE DICTIONARY ---
     st.write("---")
     st.write("### 🧠 SIGNAL INTELLIGENCE DICTIONARY")
     d1, d2 = st.columns(2)
     with d1:
         st.markdown("""
-        <div class="logic-box"><b>1. Tactical Decision Logic:</b><br><span class="signal-buy">SELL PREMIUM:</span> Neutral Trend (> -2% from 200MA) + HYG > 20MA + DXY < 20D High + VIX Spike (>8% & 1.5 Z).<br><span class="signal-sell">NO TRADE:</span> SPY is in a Downtrend (<= -2% from 200MA).</div>
-        <div class="logic-box"><b>2. Yield Curve:</b> Measures 10Y-2Y spread. Risk is highest during 're-steepening'.</div>
+        <div class="logic-box">
+            <b>1. Tactical Decision Engine (Premium Logic)</b><br>
+            <span class="signal-buy">SELL PREMIUM:</span> Neutral Trend (> -2% from 200MA) + HYG > 20MA + DXY < 20D High + VIX Spike (>8% & 1.5 Z-Score).<br>
+            <span class="signal-sell">NO TRADE:</span> Absolute override if SPY is in a Downtrend (<= -2% from 200MA).
+        </div>
+        <div class="logic-box">
+            <b>2. Yield Curve (Macro Correlation)</b><br>
+            <span class="signal-buy">BUY:</span> Curve > 0.5 or < -0.5. <br>
+            <span class="signal-sell">SELL:</span> "The Re-Steepening." Crossing 0.0 from negative. This is the #1 signal of an imminent recession.
+        </div>
+        <div class="logic-box">
+            <b>3. Trend Proximity (Moving Average)</b><br>
+            <span class="signal-buy">BUY:</span> Price is trending comfortably above the 200-day MA. Momentum is in your favor.<br>
+            <span class="signal-sell">SELL:</span> Price breaks below the 200-day MA. Structural trend change.
+        </div>
+        <div class="logic-box">
+            <b>4. Credit Canary (Risk Sentiment)</b><br>
+            <span class="signal-buy">BUY:</span> Junk Bonds (HYG) > Treasuries (IEF). Risk appetite is high.<br>
+            <span class="signal-sell">SELL:</span> Treasuries > Junk Bonds. Flight to safety confirmed.
+        </div>
         """, unsafe_allow_html=True)
+
     with d2:
         st.markdown("""
-        <div class="logic-box"><b>3. Sector Breadth:</b> Percentage of sectors above 200MA.</div>
-        <div class="logic-box"><b>4. Red Folder News:</b> High-impact events. Countdown shows time remaining until release.</div>
+        <div class="logic-box">
+            <b>5. Sector Breadth (Participation)</b><br>
+            <span class="signal-buy">BUY:</span> >8 of 11 sectors bullish. Participation is healthy.<br>
+            <span class="signal-sell">SELL:</span> <4 sectors bullish. Rally is thin and unsustainable.
+        </div>
+        <div class="logic-box">
+            <b>6. Volatility Z-Score (Mean Reversion)</b><br>
+            <span class="signal-buy">BUY:</span> Z-Score > 1.5. VIX is significantly higher than its 20-day mean (Panic).<br>
+            <span class="signal-sell">SELL:</span> Z-Score < -1.0. VIX is crushed (Complacency).
+        </div>
+        <div class="logic-box">
+            <b>7. RSI-14 & Exhaustion (Timing)</b><br>
+            <span class="signal-buy">BUY:</span> RSI < 30 or Downside 9-Count. Market is vertically exhausted.<br>
+            <span class="signal-sell">SELL:</span> RSI > 70 or Upside 9-Count. Market is overbought.
+        </div>
+        <div class="logic-box">
+            <b>8. Red Folder News (Event Risk)</b><br>
+            Tracks high-impact economic events. Countdown indicates time until the "Red Folder" release. Traders should be cautious 4 hours before release.
+        </div>
         """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
