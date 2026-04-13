@@ -6,27 +6,28 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 # --- 1. TERMINAL THEME SETUP ---
-st.set_page_config(page_title="ALPHA TERMINAL v4.7", layout="wide")
+st.set_page_config(page_title="ALPHA TERMINAL v4.8", layout="wide")
 
 st.markdown("""
 <style>
     html, body, [class*="st-"] { font-family: 'Courier New', Courier, monospace !important; }
-    .main { background-color: #0d1117; color: #c9d1d9; }
+    .main { background-color: #05070a; color: #c9d1d9; }
     .metric-container {
         border: 1px solid #30363d;
         padding: 20px;
-        background-color: #161b22;
+        background-color: #0d1117;
         margin-bottom: 20px;
     }
     .logic-box {
-        background-color: #0d1117;
+        background-color: #161b22;
         border-left: 3px solid #58a6ff;
         padding: 15px;
         margin: 10px 0;
+        font-size: 0.9em;
     }
     .signal-buy { color: #39d353; font-weight: bold; }
     .signal-sell { color: #f85149; font-weight: bold; }
-    .progress-bg { background-color: #30363d; width: 100%; height: 12px; border-radius: 2px; }
+    .progress-bg { background-color: #30363d; width: 100%; height: 14px; border-radius: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -44,8 +45,8 @@ def get_yc_analysis():
         df = pd.read_csv("https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y")
         df.columns = ['date', 'value']; df['value'] = pd.to_numeric(df['value'], errors='coerce')
         df = df.dropna(); curr = float(df['value'].iloc[-1]); was_inv = (df['value'].tail(180) < 0).any()
-        if curr > 0 and was_inv: s = 10 # Trap
-        elif curr < 0: s = 40 + (curr + 1.0) * 20 # Deep inversion vs shallow
+        if curr > 0 and was_inv: s = 10
+        elif curr < 0: s = 40 + (curr + 1.0) * 20 
         else: s = min(100, 60 + (curr * 50))
         return s, curr
     except: return 50, 0.0
@@ -56,18 +57,18 @@ def run_model():
     if prices is None: return None
     spy = prices['SPY'].dropna(); spy_px = float(spy.iloc[-1])
     
-    # 1. Trend (200MA)
+    # [1] TREND (200MA)
     ma200 = float(spy.rolling(200).mean().iloc[-1])
     dist = (spy_px - ma200) / ma200
     tr_p = min(100, max(0, 50 + (dist * 1000)))
     
-    # 2. Credit (HYG/IEF)
+    # [2] CREDIT (HYG/IEF)
     ratio = (prices['HYG'].dropna() / prices['IEF'].dropna())
     r_ma = ratio.rolling(50).mean().iloc[-1]
     r_dist = (ratio.iloc[-1] - r_ma) / r_ma
     cr_p = min(100, max(0, 50 + (r_dist * 2000)))
     
-    # 3. Breadth
+    # [3] SECTOR BREADTH
     secs = ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE']
     above = 0
     for s in secs:
@@ -75,13 +76,21 @@ def run_model():
         if not p.empty and p.iloc[-1] > p.rolling(200).mean().iloc[-1]: above += 1
     br_p = (above / 11) * 100
     
-    # 4. VIX Position
-    vix = prices['^VIX'].dropna(); v_px = float(vix.iloc[-1])
-    v_ma = vix.rolling(20).mean().iloc[-1]; v_std = vix.rolling(20).std().iloc[-1]
-    v_u = v_ma + (1.5 * v_std); v_l = v_ma - (1.5 * v_std)
-    vx_p = min(100, max(0, ((v_px - v_l) / (v_u - v_l)) * 100))
-
-    # 5. Exhaustion
+    # [4] VOLATILITY BAND (VIX Robust Logic)
+    vix_series = prices['^VIX'].dropna()
+    v_px = float(vix_series.iloc[-1])
+    # Use 20-day High and Low as the bands
+    v_high = vix_series.tail(20).max()
+    v_low = vix_series.tail(20).min()
+    
+    # Formula: Current position between 20-day high and low
+    # 100% = VIX is at 20-day high (Extreme Fear = Buy Opportunity)
+    if v_high == v_low:
+        vx_p = 50.0
+    else:
+        vx_p = ((v_px - v_low) / (v_high - v_low)) * 100
+    
+    # [5] EXHAUSTION
     dm = (spy > spy.shift(4)).astype(int); lv = int(dm.iloc[-1]); c = 0
     for val in reversed(dm.tolist()):
         if val == lv: c += 1
@@ -93,20 +102,20 @@ def run_model():
     alloc = 100 if avg >= 80 else (75 if avg >= 60 else (50 if avg >= 40 else 20))
     
     return {
-        "alloc": alloc, "avg": avg, "yc_v": yc_v, "c": c, "lv": lv,
+        "alloc": alloc, "avg": avg, "yc_v": yc_v, "v_px": v_px, "v_range": (v_low, v_high),
         "metrics": [
             ("Macro: Yield Curve", f"{yc_v:.2f}% Spread", yc_p),
             ("Trend: 200MA Prox", f"{dist:+.2%}", tr_p),
             ("Credit: Risk Ratio", "HYG/IEF", cr_p),
             ("Breadth: Sectors", f"{above}/11 Bullish", br_p),
             ("Tactical: VIX Band", f"Spot: {v_px:.1f}", vx_p),
-            ("Tactical: Exhaust", f"Count: {c}/9", dm_p)
+            ("Tactical: Exhaust", f"Step {c}/9", dm_p)
         ]
     }
 
 # --- 4. DISPLAY ---
 def main():
-    st.write(f"## ALPHA TERMINAL v4.7 // {datetime.now().strftime('%H:%M:%S')}")
+    st.write(f"## ALPHA TERMINAL v4.8 // {datetime.now().strftime('%H:%M:%S')}")
     d = run_model()
     if d is None: st.error("SYNC FAILED"); return
 
@@ -132,54 +141,54 @@ def main():
         col1.write(f"**{label}**")
         col2.write(reading)
         color = "#39d353" if pct >= 70 else "#f85149" if pct <= 30 else "#e3b341"
-        bar_html = f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:12px; border-radius:2px;"></div></div>'
+        bar_html = f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:14px; border-radius:2px;"></div></div>'
         col3.markdown(bar_html, unsafe_allow_html=True)
 
-    # --- 5. SIGNAL INTELLIGENCE DICTIONARY (THE EXPLANATIONS) ---
+    # --- 5. SIGNAL INTELLIGENCE DICTIONARY ---
     st.write("---")
     st.write("### 🧠 SIGNAL INTELLIGENCE DICTIONARY")
     
     dict_cols = st.columns(2)
     
     with dict_cols[0]:
-        st.markdown("""
+        st.markdown(f"""
         <div class="logic-box">
-            <p><b>1. Yield Curve (Macro)</b></p>
-            <span class="signal-buy">BUY:</span> Curve is "Normal" (Positive > 0.5) OR deeply inverted (-1.0).<br>
-            <span class="signal-sell">SELL:</span> "The Trap." When the curve crosses from Negative back to Positive (0.0). This precedes 90% of recessions.
+            <p><b>1. Yield Curve (Macro Correlation)</b></p>
+            <span class="signal-buy">BUY CONDITION:</span> Curve is either healthy (>0.5) or "Deeply Inverted" (< -0.5) as the market has already priced in the pain.<br>
+            <span class="signal-sell">SELL CONDITION:</span> "The Re-Steepening." When the spread crosses 0 from a negative value. This is the #1 signal of an imminent recession.
         </div>
         <div class="logic-box">
-            <p><b>2. Trend Proximity (Momentum)</b></p>
-            <span class="signal-buy">BUY:</span> Price is > 5% above the 200-Day Moving Average (Structural Uptrend).<br>
-            <span class="signal-sell">SELL:</span> Price drops below the 200MA. Historically, the worst market crashes occur only while below the 200MA.
+            <p><b>2. Trend Proximity (Moving Average)</b></p>
+            <span class="signal-buy">BUY CONDITION:</span> Price is trending comfortably above the 200-day Moving Average. Momentum is in your favor.<br>
+            <span class="signal-sell">SELL CONDITION:</span> Price breaks below the 200-day MA. This indicates a structural shift from a Bull to a Bear market.
         </div>
         <div class="logic-box">
-            <p><b>3. Credit Canary (Risk-On/Off)</b></p>
-            <span class="signal-buy">BUY:</span> HYG (Junk Bonds) outperforming IEF (Treasuries). Indicates big institutions are taking risks.<br>
-            <span class="signal-sell">SELL:</span> Treasuries outperforming Junk bonds. Indicates "Flight to Safety" liquidity flows.
+            <p><b>3. Credit Canary (Risk Sentiment)</b></p>
+            <span class="signal-buy">BUY CONDITION:</span> High Yield Junk Bonds (HYG) are outperforming safe-haven Treasuries (IEF). Capital is seeking risk.<br>
+            <span class="signal-sell">SELL CONDITION:</span> Treasuries start outperforming Junk Bonds. This "Flight to Quality" usually happens before stock market crashes.
         </div>
         """, unsafe_allow_html=True)
 
     with dict_cols[1]:
-        st.markdown("""
+        st.markdown(f"""
         <div class="logic-box">
-            <p><b>4. Sector Breadth (Internal Health)</b></p>
-            <span class="signal-buy">BUY:</span> > 8/11 sectors are above their 200MA. High participation confirms a healthy rally.<br>
-            <span class="signal-sell">SELL:</span> < 4/11 sectors are positive. Indicates "Narrow Leadership" where only a few stocks prop up the index.
+            <p><b>4. Sector Breadth (Market Participation)</b></p>
+            <span class="signal-buy">BUY CONDITION:</span> >8 of 11 S&P sectors are in uptrends. This confirms the rally is broad-based and sustainable.<br>
+            <span class="signal-sell">SELL CONDITION:</span> <4 sectors are in uptrends. This is "Narrow Leadership" where only a few tech stocks are hiding a weak market.
         </div>
         <div class="logic-box">
-            <p><b>5. Volatility Position (Sentiment)</b></p>
-            <span class="signal-buy">BUY:</span> VIX hits the Upper Bollinger Band (Extreme Fear). Markets usually bottom when fear peaks.<br>
-            <span class="signal-sell">SELL:</span> VIX hits the Lower Bollinger Band (Complacency). Risk is highest when everything feels safe.
+            <p><b>5. Volatility Band (Contrarian Timing)</b></p>
+            <span class="signal-buy">BUY CONDITION:</span> VIX is at a 20-day High (Strength = 100%). When the "crowd" is terrified, it is historically the best time to buy.<br>
+            <span class="signal-sell">SELL CONDITION:</span> VIX is at a 20-day Low (Strength = 0%). Extreme complacency often leads to sharp, unexpected sell-offs.
         </div>
         <div class="logic-box">
-            <p><b>6. Exhaustion Count (Timing)</b></p>
-            <span class="signal-buy">BUY:</span> Downside 9-Count. Indicates sellers are exhausted; a relief rally or reversal is statistically probable.<br>
-            <span class="signal-sell">SELL:</span> Upside 9-Count. Indicates "FOMO" buying is exhausted; market is likely "overbought" and needs to cool.
+            <p><b>6. Exhaustion Count (Sequential Logic)</b></p>
+            <span class="signal-buy">BUY CONDITION:</span> Downside 9-Count. Current price has been lower than the price 4 days ago for 9 consecutive steps.<br>
+            <span class="signal-sell">SELL CONDITION:</span> Upside 9-Count. The market is "vertically exhausted" and likely to mean-revert or consolidate.
         </div>
         """, unsafe_allow_html=True)
 
-    st.caption(f"ALPHA TERMINAL v4.7 // AGGREGATE MODEL WEIGHTING: EQUAL-WEIGHT LINEAR RANK // REFRESH TO SYNC")
+    st.caption(f"ALPHA TERMINAL // VIX 20D RANGE: {d['v_range'][0]:.1f} - {d['v_range'][1]:.1f}")
 
 if __name__ == "__main__":
     main()
