@@ -5,11 +5,9 @@ import streamlit as st
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import pytz
-import requests
-import xml.etree.ElementTree as ET
 
 # --- 1. TERMINAL THEME SETUP ---
-st.set_page_config(page_title="ALPHA TERMINAL v5.6", layout="wide")
+st.set_page_config(page_title="ALPHA TERMINAL v5.7", layout="wide")
 
 st.markdown("""
 <style>
@@ -28,8 +26,6 @@ st.markdown("""
         margin-bottom: 10px;
         border-radius: 4px;
     }
-    .market-open { color: #39d353; font-weight: bold; }
-    .market-closed { color: #f85149; font-weight: bold; }
     .red-folder { color: #f85149; font-weight: bold; animation: blinker 2s linear infinite; }
     @keyframes blinker { 50% { opacity: 0; } }
     .action-card {
@@ -38,82 +34,45 @@ st.markdown("""
     .status-no-trade { background-color: #3e1b1b; color: #f85149; border-color: #f85149; }
     .status-sell-premium { background-color: #1b2e3e; color: #58a6ff; border-color: #58a6ff; }
     .status-wait { background-color: #21262d; color: #8b949e; border-color: #30363d; }
-    .logic-box { background-color: #161b22; border-left: 3px solid #58a6ff; padding: 15px; margin: 10px 0; font-size: 0.85em; }
+    .logic-box { background-color: #161b22; border-left: 3px solid #58a6ff; padding: 15px; margin: 10px 0; font-size: 0.85em; line-height: 1.5; }
     .progress-bg { background-color: #30363d; width: 100%; height: 14px; border-radius: 2px; }
+    .signal-buy { color: #39d353; font-weight: bold; }
+    .signal-sell { color: #f85149; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. LIVE ECONOMIC CALENDAR ENGINE ---
-def get_live_red_folders():
-    """
-    Fetches the actual weekly calendar from Forex Factory's RSS feed.
-    Filters for 'High' impact events only.
-    """
-    tz = pytz.timezone('US/Eastern')
-    now = datetime.now(tz)
-    upcoming_red_folders = []
-
-    try:
-        # Forex Factory XML Weekly Feed
-        response = requests.get("https://www.forexfactory.com/ff_calendar_thisweek.xml", timeout=5)
-        root = ET.fromstring(response.content)
-
-        for event in root.findall('event'):
-            impact = event.find('impact').text
-            # Only look for "High" impact (Red Folders)
-            if impact == 'High':
-                title = event.find('title').text
-                date_str = event.find('date').text # Format: MM-DD-YYYY
-                time_str = event.find('time').text # Format: 8:30am
-                
-                # Combine and parse date/time
-                full_dt_str = f"{date_str} {time_str}"
-                # Handle cases with no specific time (e.g. 'All Day')
-                try:
-                    event_dt = datetime.strptime(full_dt_str, "%m-%d-%Y %I:%M%p")
-                    event_dt = tz.localize(event_dt)
-                except:
-                    continue
-
-                diff = event_dt - now
-                if diff.total_seconds() > 0:
-                    h, r = divmod(int(diff.total_seconds()), 3600)
-                    m, _ = divmod(r, 60)
-                    upcoming_red_folders.append({
-                        "event": title,
-                        "date": event_dt,
-                        "countdown": f"{h}h {m}m",
-                        "urgent": h < 4
-                    })
-    except Exception as e:
-        # Fallback to specific High Impact Jan 2025 events if RSS fails
-        fallback_events = [
-            {"event": "CPI Inflation Data", "date": datetime(2025, 1, 15, 8, 30, tzinfo=tz)},
-            {"event": "Retail Sales", "date": datetime(2025, 1, 15, 8, 30, tzinfo=tz)},
-            {"event": "FOMC Rate Decision", "date": datetime(2025, 1, 29, 14, 0, tzinfo=tz)},
-        ]
-        for fe in fallback_events:
-            diff = fe['date'] - now
-            if diff.total_seconds() > 0:
-                h, r = divmod(int(diff.total_seconds()), 3600)
-                m, _ = divmod(r, 60)
-                fe['countdown'] = f"{h}h {m}m"
-                fe['urgent'] = h < 4
-                upcoming_red_folders.append(fe)
-
-    return sorted(upcoming_red_folders, key=lambda x: x['date'])[:3]
-
-# --- 3. MARKET STATUS ---
+# --- 2. MARKET STATUS & REAL RED FOLDER NEWS ---
 def get_market_status():
     tz = pytz.timezone('US/Eastern')
     now = datetime.now(tz)
-    if now.weekday() >= 5: return "CLOSED (WEEKEND)", "market-closed"
+    if now.weekday() >= 5: return "CLOSED (WEEKEND)", "status-no-trade"
     open_t = now.replace(hour=9, minute=30, second=0)
     close_t = now.replace(hour=16, minute=0, second=0)
-    if open_t <= now <= close_t: return "MARKET OPEN", "market-open"
-    return "MARKET CLOSED", "market-closed"
+    if open_t <= now <= close_t: return "MARKET OPEN", "status-sell-premium"
+    return "MARKET CLOSED", "status-wait"
 
-# --- 4. DATA ENGINE & CORE LOGIC ---
+def get_red_folder_events():
+    tz = pytz.timezone('US/Eastern')
+    now = datetime.now(tz)
+    # Actual Jan 2025 High-Impact (Red Folder) Economic Events
+    events_list = [
+        {"event": "Non-Farm Payrolls (NFP)", "date": datetime(2025, 1, 10, 8, 30, tzinfo=tz)},
+        {"event": "CPI Inflation Data", "date": datetime(2025, 1, 15, 8, 30, tzinfo=tz)},
+        {"event": "Retail Sales", "date": datetime(2025, 1, 15, 8, 30, tzinfo=tz)},
+        {"event": "FOMC Rate Decision", "date": datetime(2025, 1, 29, 14, 0, tzinfo=tz)},
+    ]
+    upcoming = []
+    for e in events_list:
+        diff = e['date'] - now
+        if diff.total_seconds() > 0:
+            h, r = divmod(int(diff.total_seconds()), 3600)
+            m, _ = divmod(r, 60)
+            e['countdown'] = f"{h}h {m}m"
+            e['urgent'] = h < 4
+            upcoming.append(e)
+    return sorted(upcoming, key=lambda x: x['date'])[:3]
+
+# --- 3. DATA ENGINE ---
 @st.cache_data(ttl=3600)
 def fetch_alpha_data():
     tks = ['SPY', '^VIX', 'HYG', 'IEF', 'DX-Y.NYB', 'XLY', 'XLP', 'XLE', 'XLF', 'XLV', 'XLI', 'XLB', 'XLK', 'XLU', 'XLC', 'XLRE']
@@ -122,6 +81,18 @@ def fetch_alpha_data():
         return df['Close'] if not df.empty else None
     except: return None
 
+def get_yc_analysis():
+    try:
+        df = pd.read_csv("https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y")
+        df.columns = ['date', 'value']; df['value'] = pd.to_numeric(df['value'], errors='coerce')
+        df = df.dropna(); curr = float(df['value'].iloc[-1]); was_inv = (df['value'].tail(180) < 0).any()
+        if curr > 0 and was_inv: s = 10
+        elif curr < 0: s = 40 + (curr + 1.0) * 20 
+        else: s = min(100, 60 + (curr * 50))
+        return s, curr
+    except: return 50, 0.0
+
+# --- 4. ANALYTICS ENGINE ---
 def run_model():
     prices = fetch_alpha_data()
     if prices is None: return None
@@ -131,48 +102,133 @@ def run_model():
     hyg = prices['HYG'].dropna(); hyg_px = float(hyg.iloc[-1])
     dxy = prices['DX-Y.NYB'].dropna(); dxy_px = float(dxy.iloc[-1])
 
-    # [TACTICAL DECISION LOGIC]
+    # [A] TACTICAL OVERRIDE LOGIC (PER USER SPEC)
     spy_200ma = spy.rolling(200).mean().iloc[-1]
     dist_to_200 = (spy_px - spy_200ma) / spy_200ma
     downtrend = dist_to_200 <= -0.02
-    
+    neutral_trend = dist_to_200 > -0.02
+
     hyg_20ma = hyg.rolling(20).mean().iloc[-1]
     dxy_20_high = dxy.tail(20).max()
-    env_ok = (dist_to_200 > -0.02 and hyg_px >= hyg_20ma and dxy_px < dxy_20_high)
+    env_ok = (neutral_trend and hyg_px >= hyg_20ma and dxy_px < dxy_20_high)
 
     vix_prev = vix.shift(1).iloc[-1]
-    vix_zscore = (vix_px - vix.rolling(20).mean().iloc[-1]) / vix.rolling(20).std().iloc[-1]
     vix_change = (vix_px - vix_prev) / vix_prev
+    vix_20ma = vix.rolling(20).mean().iloc[-1]
+    vix_20std = vix.rolling(20).std().iloc[-1]
+    vix_zscore = (vix_px - vix_20ma) / vix_20std
     good_spike = (vix_change > 0.08 and vix_zscore > 1.5)
 
     if downtrend: action, a_class = "NO TRADE", "status-no-trade"
     elif env_ok and good_spike: action, a_class = "SELL PREMIUM", "status-sell-premium"
     else: action, a_class = "WAIT", "status-wait"
 
-    # [7-METRIC STRENGTH SYSTEM]
+    # [B] 7-METRIC STRENGTH SCORING
     tr_p = min(100, max(0, 50 + (dist_to_200 * 1000)))
     ratio = (prices['HYG'] / prices['IEF']).dropna()
     cr_p = min(100, max(0, 50 + ((ratio.iloc[-1] / ratio.rolling(50).mean().iloc[-1]) - 1) * 2000))
-    above = sum([1 for s in ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE'] if prices[s].iloc[-1] > prices[s].rolling(200).mean().iloc[-1]])
+    secs = ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE']
+    above = sum([1 for s in secs if prices[s].iloc[-1] > prices[s].rolling(200).mean().iloc[-1]])
     br_p = (above / 11) * 100
     vx_p = min(100, max(0, (vix_zscore + 2) * 25))
+    
     delta = spy.diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rsi_val = 100 - (100 / (1 + (gain/loss))).iloc[-1]
     rsi_p = 100 - rsi_val 
+
     dm = (spy > spy.shift(4)).astype(int); lv = int(dm.iloc[-1]); c = 0
     for val in reversed(dm.tolist()):
         if val == lv: c += 1
         else: break
     dm_p = (c / 9 * 100) if lv == 0 else (100 - (c / 9 * 100))
-    
-    # Simple logic for FRED yield curve fallback
-    yc_v = 0.0; yc_p = 50 
 
+    yc_p, yc_v = get_yc_analysis()
     avg = (tr_p + cr_p + br_p + vx_p + dm_p + yc_p + rsi_p) / 7
+    alloc = 100 if avg >= 80 else (75 if avg >= 60 else (50 if avg >= 40 else 20))
+
     return {
-        "avg": avg, "action": action, "a_class": a_class, "metrics": [
+        "alloc": alloc, "avg": avg, "action": action, "a_class": a_class, "yc_v": yc_v, "rsi": rsi_val, "c": c,
+        "metrics": [
+            ("Macro: Yield Curve", f"{yc_v:.2f}% Spread", yc_p),
             ("Trend: 200MA Prox", f"{dist_to_200:+.2%}", tr_p),
-            ("Credit: Risk Ratio", "HYG/IEF", cr_p),
+            ("Credit: Risk Ratio", "HYG/IEF Strength", cr_p),
             ("Breadth: Sectors", f"{above}/11 Bullish", br_p),
-            ("Tactical: VIX Z", f"Z: {vix_zscore:.2f}", vx_p),
-            ("Tactical: RSI-14", f"Val: {rsi_val:.1f}
+            ("Tactical: VIX Z-Score", f"Z: {vix_zscore:.2f}", vx_p),
+            ("Tactical: RSI-14", f"Val: {rsi_val:.1f}", rsi_p),
+            ("Tactical: Exhaust", f"Step {c}/9", dm_p)
+        ]
+    }
+
+# --- 5. DISPLAY ---
+def main():
+    m_status, m_class = get_market_status()
+    st.write(f"## ALPHA TERMINAL v5.7 // <span class='{m_class}'>{m_status}</span>", unsafe_allow_html=True)
+    
+    d = run_model()
+    if d is None: return
+
+    # TOP DASHBOARD
+    c_news, c_action, c_gauge = st.columns([1, 1.2, 1])
+    with c_news:
+        st.write("### 🚨 RED FOLDER RADAR")
+        events = get_red_folder_events()
+        if not events: st.info("No high-impact events imminent.")
+        for e in events:
+            u_cls = "red-folder" if e['urgent'] else ""
+            st.markdown(f'<div class="news-card"><small>HIGH IMPACT</small><br><span class="{u_cls}">{e["event"]}</span><br>T-MINUS: {e["countdown"]}</div>', unsafe_allow_html=True)
+
+    with c_action:
+        st.write("### ⚔️ STRATEGIC DECISION")
+        st.markdown(f'<div class="metric-container" style="text-align:center;"><p style="color:#8b949e; margin-bottom:15px;">TACTICAL BIAS</p><div class="action-card {d["a_class"]}">{d["action"]}</div><p style="margin-top:15px;">ALLOCATION: {d["alloc"]}%</p></div>', unsafe_allow_html=True)
+
+    with c_gauge:
+        st.write("### 📊 AGGREGATE STRENGTH")
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=d['avg'], gauge={'axis':{'range':[0,100]}, 'bar':{'color':"#58a6ff"}, 'bgcolor':"#161b22"}))
+        fig.update_layout(height=180, margin=dict(l=20,r=20,t=30,b=20), paper_bgcolor='rgba(0,0,0,0)', font={'color': "#8b949e"})
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.write("### STRENGTH LEDGER")
+    for label, reading, pct in d['metrics']:
+        col1, col2, col3 = st.columns([1, 1, 2])
+        col1.write(f"**{label}**"); col2.write(reading)
+        color = "#39d353" if pct >= 70 else "#f85149" if pct <= 30 else "#e3b341"
+        col3.markdown(f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:14px; border-radius:2px;"></div></div>', unsafe_allow_html=True)
+
+    # --- RESTORED SIGNAL INTELLIGENCE DICTIONARY ---
+    st.write("---")
+    st.write("### 🧠 SIGNAL INTELLIGENCE DICTIONARY")
+    d1, d2 = st.columns(2)
+    with d1:
+        st.markdown("""
+        <div class="logic-box">
+            <b>1. Tactical Action Logic (Premium Engine)</b><br>
+            <span class="signal-buy">SELL PREMIUM:</span> Neutral Trend (SPY > -2% of 200MA) AND Environment OK (HYG > 20MA, DXY < 20D High) AND Volatility Spike (VIX > 8% move & Z-Score > 1.5).<br>
+            <span class="signal-sell">NO TRADE:</span> Absolute override triggered if SPY is in a Downtrend (<= -2% from its 200-day Moving Average).
+        </div>
+        <div class="logic-box">
+            <b>2. Yield Curve (Macro Correlation)</b><br>
+            Measures the 10Y-2Y spread. Risk is highest during 're-steepening' (crossing 0.0 from negative). This typically precedes a major liquidity event.
+        </div>
+        <div class="logic-box">
+            <b>3. Trend Proximity (Moving Average)</b><br>
+            Calculates distance from the 200-day MA. Markets trading comfortably above the 200MA have bullish tailwinds; those below have structural headwinds.
+        </div>
+        """, unsafe_allow_html=True)
+    with d2:
+        st.markdown("""
+        <div class="logic-box">
+            <b>4. Credit Canary (Risk-On/Off)</b><br>
+            HYG/IEF ratio. When Junk Bonds outperform Treasuries, capital is moving into risk. When Treasuries lead, capital is fleeing to safety.
+        </div>
+        <div class="logic-box">
+            <b>5. Sector Breadth (Internal Health)</b><br>
+            Counts how many of the 11 S&P sectors are above their 200MA. 11/11 indicates a robust rally; <4/11 indicates a fragile market propped up by few stocks.
+        </div>
+        <div class="logic-box">
+            <b>6. Volatility & Exhaustion (Timing)</b><br>
+            <b>VIX Z-Score:</b> Measures fear vs the 20-day mean. <b>RSI-14:</b> Tactical overbought/oversold levels. <b>TD-Exhaustion:</b> Sequential 9-counts indicating trend completion.
+        </div>
+        """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
