@@ -7,136 +7,136 @@ from email.mime.text import MIMEText
 from datetime import datetime
 
 # =============================================================================
-# 1. SETUP
+# 1. DATA ENGINE
 # =============================================================================
-RECIPIENTS = ["your_email@gmail.com"] 
-
-# =============================================================================
-# 2. THE ENGINE
-# =============================================================================
-class RegimeEngine:
-    def get_price(self, ticker, days=300):
+class ScorecardEngine:
+    def get_px(self, ticker, days=350):
         try:
-            # Download data
             df = yf.download(ticker, period=f"{days}d", interval="1d", progress=False, auto_adjust=True)
-            if df.empty:
-                return pd.Series()
-            
-            # This line handles the "MultiIndex" error that causes most crashes
-            if isinstance(df.columns, pd.MultiIndex):
-                close_data = df['Close'].iloc[:, 0]
-            else:
-                close_data = df['Close']
-            
-            return close_data.dropna()
-        except:
-            return pd.Series()
+            if df.empty: return pd.Series()
+            return df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
+        except: return pd.Series()
 
-    def get_yc(self):
+    def get_yc_raw(self):
         try:
-            url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y"
-            df = pd.read_csv(url)
+            df = pd.read_csv("https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y")
             df.columns = ['date', 'value']
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
             return df.dropna()
-        except:
-            return pd.DataFrame()
+        except: return pd.DataFrame()
 
-    def run_analysis(self):
-        # 1. Yield Curve Logic
-        yc_df = self.get_yc()
-        if yc_df.empty:
-            return None
+# =============================================================================
+# 2. INDIVIDUAL SCORING CALCULATIONS (1-10)
+# =============================================================================
+    def calculate_scores(self):
+        scores = {}
         
-        curr_yc = float(yc_df.iloc[-1]['value'])
-        was_neg = (yc_df.tail(252)['value'] < 0).any()
-        yc_safe = not (curr_yc > 0 and was_neg)
+        # --- 1. YIELD CURVE SCORE ---
+        yc = self.get_yc_raw()
+        curr_yc = float(yc.iloc[-1]['value'])
+        was_neg = (yc.tail(252)['value'] < 0).any()
+        # Trap (Positive now but was negative) = 1, Healthy = 10, Inverted = 5
+        if curr_yc > 0 and was_neg: scores['Yield Curve'] = 1
+        elif curr_yc < 0: scores['Yield Curve'] = 5
+        else: scores['Yield Curve'] = 10
 
-        # 2. Credit Logic (HYG vs IEF)
-        hyg = self.get_price('HYG', 150)
-        ief = self.get_price('IEF', 150)
-        
-        if hyg.empty or ief.empty:
-            return None
-
+        # --- 2. CREDIT CANARY (HYG/IEF) ---
+        hyg = self.get_px('HYG', 150)
+        ief = self.get_px('IEF', 150)
         ratio = hyg / ief
         ma50 = ratio.rolling(50).mean()
-        credit_safe = float(ratio.iloc[-1]) > float(ma50.iloc[-1])
+        # Above MA = 10, Below = 1
+        scores['Credit Canary'] = 10 if float(ratio.iloc[-1]) > float(ma50.iloc[-1]) else 1
 
-        # 3. Timing Triggers (VIX)
-        vix = self.get_price('^VIX', 50)
-        vix_buy = False
-        if not vix.empty and len(vix) > 21:
-            v_ma = vix.rolling(20).mean()
-            v_std = vix.rolling(20).std()
-            upper = v_ma + (2 * v_std)
-            vix_buy = (float(vix.iloc[-2]) > float(upper.iloc[-2])) and (float(vix.iloc[-1]) < float(upper.iloc[-1]))
+        # --- 3. TREND (SPY vs 200MA) ---
+        spy = self.get_px('SPY', 350)
+        ma200 = spy.rolling(200).mean()
+        # Above = 10, Below = 1
+        scores['Market Trend'] = 10 if float(spy.iloc[-1]) > float(ma200.iloc[-1]) else 1
 
-        # 4. Trend Logic
-        spy = self.get_price('SPY', 300)
-        spy_price = float(spy.iloc[-1]) if not spy.empty else 0
-        spy_ma = spy.rolling(200).mean()
-        trend_up = spy_price > float(spy_ma.iloc[-1]) if not spy.empty else False
-
-        regime = "OFFENSIVE" if (yc_safe and credit_safe) else "DEFENSIVE"
-        
-        return {
-            "regime": regime,
-            "yc_val": curr_yc,
-            "yc_safe": yc_safe,
-            "credit_safe": credit_safe,
-            "vix_buy": vix_buy,
-            "trend_up": trend_up,
-            "spy_price": spy_price
-        }
-
-# =============================================================================
-# 3. DASHBOARD & ALERTS
-# =============================================================================
-def send_email(text):
-    sender = os.environ.get("EMAIL_ADDRESS")
-    pwd = os.environ.get("EMAIL_PASSWORD")
-    if not sender or not pwd: return
-    try:
-        msg = MIMEText(text)
-        msg['Subject'] = "Market Timing Alert"
-        msg['From'] = sender
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(sender, pwd)
-            server.sendmail(sender, RECIPIENTS, msg.as_string())
-    except: pass
-
-def main():
-    # If running in a browser (Streamlit)
-    if st.runtime.exists():
-        st.set_page_config(page_title="Market Timer")
-        st.title("🛡️ Market Timing Dashboard")
-        
-        engine = RegimeEngine()
-        data = engine.run_analysis()
-        
-        if data:
-            c1, c2 = st.columns(2)
-            if data['regime'] == "OFFENSIVE":
-                c1.success(f"### REGIME: {data['regime']} 🟢")
-            else:
-                c1.error(f"### REGIME: {data['regime']} 🔴")
-            
-            c2.metric("Yield Curve", f"{data['yc_val']:.2f}%")
-            
-            st.divider()
-            st.write(f"**VIX Signal:** {'✅ BUY' if data['vix_buy'] else '⚪ None'}")
-            st.write(f"**Long-Term Trend:** {'📈 Bullish' if data['trend_up'] else '📉 Bearish'}")
-            st.info(f"Price: SPY ${data['spy_price']:.2f}")
+        # --- 4. VIX SNAPBACK ---
+        vix = self.get_px('^VIX', 50)
+        v_ma = vix.rolling(20).mean(); v_std = vix.rolling(20).std()
+        upper = v_ma + (2 * v_std); lower = v_ma - (2 * v_std)
+        # Snapback = 10, Touching lower (complacency) = 2, Neutral = 5
+        if (float(vix.iloc[-2]) > float(upper.iloc[-2])) and (float(vix.iloc[-1]) < float(upper.iloc[-1])):
+            scores['VIX Signal'] = 10
+        elif float(vix.iloc[-1]) < float(lower.iloc[-1]):
+            scores['VIX Signal'] = 2
         else:
-            st.error("Data currently unavailable. Please refresh in a moment.")
+            scores['VIX Signal'] = 5
 
-    # If running as an automated background alert
-    else:
-        engine = RegimeEngine()
-        data = engine.run_analysis()
-        if data and data['regime'] == "OFFENSIVE" and data['vix_buy']:
-            send_email(f"BUY SIGNAL: Regime Offensive / VIX Snapback. SPY: ${data['spy_price']:.2f}")
+        # --- 5. BREADTH (% Above 50MA) ---
+        leaders = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'JPM', 'V', 'LLY']
+        above = 0
+        for t in leaders:
+            p = self.get_px(t, 60)
+            if not p.empty and p.iloc[-1] > p.rolling(50).mean().iloc[-1]: above += 1
+        breadth = (above / len(leaders)) * 10
+        # Washout (<20%) is actually a 10 (Buy), Overbought (>80%) is a 2 (Sell)
+        if breadth <= 2: scores['Breadth'] = 10
+        elif breadth >= 8: scores['Breadth'] = 2
+        else: scores['Breadth'] = 6
+
+        # --- 6. DEMARK COUNT (SPY) ---
+        counts = (spy > spy.shift(4)).astype(int)
+        last_val = counts.iloc[-1]; c = 0
+        for val in reversed(counts.tolist()):
+            if val == last_val: c += 1
+            else: break
+        # Downside 9 = 10, Upside 9 = 1, Else 5
+        if c >= 9 and last_val == 0: scores['DeMark'] = 10
+        elif c >= 9 and last_val == 1: scores['DeMark'] = 1
+        else: scores['DeMark'] = 5
+
+        return scores, float(spy.iloc[-1]), curr_yc
+
+# =============================================================================
+# 3. DASHBOARD UI
+# =============================================================================
+def main():
+    st.set_page_config(page_title="Market Scorecard", layout="wide")
+    st.title("⚖️ Market Timing Scorecard")
+    
+    engine = ScorecardEngine()
+    with st.spinner('Calculating Individual Rankings...'):
+        scores, spy_price, yc_val = engine.calculate_scores()
+
+    # Calculate Total Score
+    total_avg = sum(scores.values()) / len(scores)
+
+    # --- TOP SECTION: THE SUMMARY ---
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.subheader(f"Total Market Score: {total_avg:.1f} / 10")
+        color = "green" if total_avg >= 7 else "orange" if total_avg >= 4 else "red"
+        st.markdown(f"<div style='height:30px; width:100%; background-color:#e0e0e0; border-radius:10px;'><div style='height:30px; width:{total_avg*10}%; background-color:{color}; border-radius:10px;'></div></div>", unsafe_allow_html=True)
+    
+    with col2:
+        if total_avg >= 7: st.success("STRATEGY: OFFENSIVE")
+        elif total_avg >= 4: st.warning("STRATEGY: NEUTRAL")
+        else: st.error("STRATEGY: DEFENSIVE")
+
+    st.divider()
+
+    # --- BOTTOM SECTION: THE INDIVIDUAL RANKINGS ---
+    st.write("### Individual Indicator Rankings (1=Sell, 10=Buy)")
+    
+    # Create 3 columns for the 6 indicators
+    c1, c2, c3 = st.columns(3)
+    
+    items = list(scores.items())
+    for i, (name, val) in enumerate(items):
+        target_col = [c1, c2, c3][i % 3]
+        with target_col:
+            st.metric(name, f"{val}/10")
+            # Small visual bar for each
+            bar_color = "#2ecc71" if val >= 7 else "#e67e22" if val >= 4 else "#e74c3c"
+            st.markdown(f"<div style='height:8px; width:100%; background-color:#eee;'><div style='height:8px; width:{val*10}%; background-color:{bar_color};'></div></div>", unsafe_allow_html=True)
+            st.write("") # Spacing
+
+    st.divider()
+    st.info(f"Market Snapshot: SPY at ${spy_price:.2f} | 10Y-2Y Spread: {yc_val:.2f}%")
 
 if __name__ == "__main__":
     main()
