@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- 1. TERMINAL THEME SETUP ---
-st.set_page_config(page_title="ALPHA TERMINAL v5.2", layout="wide")
+st.set_page_config(page_title="ALPHA TERMINAL v5.3", layout="wide")
 
 st.markdown("""
 <style>
@@ -36,17 +36,19 @@ st.markdown("""
     .status-wait { background-color: #21262d; color: #8b949e; border-color: #30363d; }
     .logic-box { background-color: #161b22; border-left: 3px solid #58a6ff; padding: 15px; margin: 10px 0; font-size: 0.85em; }
     .progress-bg { background-color: #30363d; width: 100%; height: 14px; border-radius: 2px; }
+    .signal-buy { color: #39d353; font-weight: bold; }
+    .signal-sell { color: #f85149; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. ECONOMIC NEWS ENGINE ---
 def get_red_folder_events():
     now = datetime.now(pytz.timezone('US/Eastern'))
-    # Simulated High-Impact Events (In production, replace with API feed)
+    # Static schedule for demonstration - in production, this would pull from an API
     events = [
-        {"event": "Core CPI Inflation", "date": (now + timedelta(hours=14)).replace(minute=30)},
-        {"event": "FOMC Meeting Minutes", "date": (now + timedelta(hours=6)).replace(minute=0)},
-        {"event": "Unemployment Claims", "date": (now + timedelta(hours=30)).replace(minute=30)}
+        {"event": "FOMC Interest Rate Decision", "date": (now + timedelta(hours=4)).replace(minute=0)},
+        {"event": "CPI Inflation Data", "date": (now + timedelta(hours=18)).replace(minute=30)},
+        {"event": "Non-Farm Payrolls", "date": (now + timedelta(hours=42)).replace(minute=30)}
     ]
     upcoming = []
     for e in events:
@@ -112,14 +114,11 @@ def run_model():
 
     # [B] FULL SYSTEM METRICS
     tr_p = min(100, max(0, 50 + (dist_to_200 * 1000)))
-    
     ratio = (prices['HYG'] / prices['IEF']).dropna()
     cr_p = min(100, max(0, 50 + ((ratio.iloc[-1] / ratio.rolling(50).mean().iloc[-1]) - 1) * 2000))
-    
     secs = ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE']
     above = sum([1 for s in secs if prices[s].iloc[-1] > prices[s].rolling(200).mean().iloc[-1]])
     br_p = (above / 11) * 100
-    
     vx_p = min(100, max(0, (vix_zscore + 2) * 25))
     
     delta = spy.diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -133,7 +132,6 @@ def run_model():
     dm_p = (c / 9 * 100) if lv == 0 else (100 - (c / 9 * 100))
 
     yc_p, yc_v = get_yc_analysis()
-    
     avg = (tr_p + cr_p + br_p + vx_p + dm_p + yc_p + rsi_p) / 7
     alloc = 100 if avg >= 80 else (75 if avg >= 60 else (50 if avg >= 40 else 20))
 
@@ -153,23 +151,21 @@ def run_model():
 
 # --- 5. DISPLAY ---
 def main():
-    st.write(f"## ALPHA TERMINAL v5.2 // {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.write(f"## ALPHA TERMINAL v5.3 // {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     d = run_model()
     if d is None: return
 
-    # TOP ROW: NEWS, ACTION, AND STRENGTH
+    # TOP ROW
     c_news, c_action, c_gauge = st.columns([1, 1.2, 1])
-    
     with c_news:
         st.write("### 🚨 RED FOLDER NEWS")
-        if not d['news']: st.write("No major news imminent.")
         for e in d['news']:
-            urgent_cls = "red-folder" if e['urgent'] else ""
-            st.markdown(f"""<div class="news-card"><small>HIGH IMPACT</small><br><span class="{urgent_cls}">{e['event']}</span><br>T-MINUS: {e['countdown']}</div>""", unsafe_allow_html=True)
+            u_cls = "red-folder" if e['urgent'] else ""
+            st.markdown(f'<div class="news-card"><small>HIGH IMPACT</small><br><span class="{u_cls}">{e["event"]}</span><br>T-MINUS: {e["countdown"]}</div>', unsafe_allow_html=True)
 
     with c_action:
         st.write("### ⚔️ STRATEGIC DECISION")
-        st.markdown(f"""<div class="metric-container" style="text-align:center;"><p style="color:#8b949e; margin-bottom:15px;">TACTICAL BIAS</p><div class="action-card {d['a_class']}">{d['action']}</div><p style="margin-top:15px;">ALLOCATION: {d['alloc']}%</p></div>""", unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-container" style="text-align:center;"><p style="color:#8b949e; margin-bottom:15px;">TACTICAL BIAS</p><div class="action-card {d["a_class"]}">{d["action"]}</div><p style="margin-top:15px;">ALLOCATION: {d["alloc"]}%</p></div>', unsafe_allow_html=True)
 
     with c_gauge:
         st.write("### 📊 AGGREGATE STRENGTH")
@@ -188,5 +184,15 @@ def main():
     st.write("### 🧠 SIGNAL INTELLIGENCE DICTIONARY")
     d1, d2 = st.columns(2)
     with d1:
-        st.markdown(f"""
-        <div class="logic-box"><b>1. Ta
+        st.markdown("""
+        <div class="logic-box"><b>1. Tactical Decision Logic:</b><br><span class="signal-buy">SELL PREMIUM:</span> Neutral Trend (> -2% from 200MA) + HYG > 20MA + DXY < 20D High + VIX Spike (>8% & 1.5 Z).<br><span class="signal-sell">NO TRADE:</span> SPY is in a Downtrend (<= -2% from 200MA).</div>
+        <div class="logic-box"><b>2. Yield Curve:</b> Measures 10Y-2Y spread. Risk is highest during 're-steepening'.</div>
+        """, unsafe_allow_html=True)
+    with d2:
+        st.markdown("""
+        <div class="logic-box"><b>3. Sector Breadth:</b> Percentage of sectors above 200MA.</div>
+        <div class="logic-box"><b>4. Red Folder News:</b> High-impact events. Countdown shows time remaining until release.</div>
+        """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
