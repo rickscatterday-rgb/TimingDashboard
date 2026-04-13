@@ -3,192 +3,208 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# --- SET PAGE CONFIG ---
-st.set_page_config(page_title="Investment Allocation Console", layout="wide")
+# --- INSTITUTIONAL THEME CONFIG ---
+st.set_page_config(page_title="ALPHA TERMINAL | Institutional Dashboard", layout="wide")
 
-# --- CUSTOM CSS ---
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-    html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
-    .main { background-color: #f8f9fa; }
-    .metric-card {
-        background-color: white; padding: 20px; border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #eef2f6;
-        min-height: 180px;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    
+    /* Dark Terminal Theme */
+    .main { background-color: #0e1117; color: #ffffff; }
+    font-family: 'Inter', sans-serif;
+
+    /* Glassmorphism Cards */
+    .stMetric { background: #1a1c24; border: 1px solid #2d2f39; padding: 20px; border-radius: 10px; }
+    .card {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 24px;
+        margin-bottom: 20px;
     }
-    .allocation-box {
-        background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-        color: white; padding: 30px; border-radius: 15px; text-align: center;
-        box-shadow: 0 10px 15px rgba(59, 130, 246, 0.2);
+    
+    .macro-header { color: #8b949e; font-size: 0.8rem; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 15px;}
+    .allocation-value { font-size: 4rem; font-weight: 800; color: #58a6ff; line-height: 1; }
+    .score-badge { padding: 4px 10px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; }
+    
+    /* Allocation Glow */
+    .glow-box {
+        border: 1px solid #30363d;
+        border-left: 4px solid #58a6ff;
+        background: #0d1117;
+        padding: 30px;
+        border-radius: 8px;
     }
-    .status-tag { padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.75rem; }
-    .logic-text { color: #64748b; font-size: 0.8rem; margin-top: 10px; line-height: 1.3; }
     </style>
     """, unsafe_allow_html=True)
 
-class ProEngine:
-    def get_px(self, ticker, days=365):
+class AlphaEngine:
+    def get_px(self, ticker, days=400):
         try:
             df = yf.download(ticker, period=f"{days}d", interval="1d", progress=False, auto_adjust=True)
-            if df.empty: return pd.Series()
             return df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
         except: return pd.Series()
 
-    def get_yc(self):
+    def get_yc_analysis(self):
         try:
             df = pd.read_csv("https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y")
             df.columns = ['date', 'value']
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
-            return df.dropna()
-        except: return pd.DataFrame()
+            df = df.dropna()
+            
+            curr = float(df.iloc[-1]['value'])
+            # Recession Watch: Was it inverted in the last 180 days?
+            lookback = df.tail(180)
+            was_inverted = (lookback['value'] < 0).any()
+            
+            # SCORING: 1 (Danger/Lag), 5 (Inverted), 10 (Healthy)
+            if curr > 0 and was_inverted: score = 1 # The Trap
+            elif curr < 0: score = 5 # Inversion
+            else: score = 10 # Healthy
+            
+            return score, curr, was_inverted
+        except: return 5, 0, False
 
-    def calculate_all(self):
+    def run_alpha_model(self):
         scores = {}
-        logic = {}
-
-        # 1. Yield Curve
-        yc = self.get_yc()
-        curr_yc = float(yc.iloc[-1]['value'])
-        was_neg = (yc.tail(252)['value'] < 0).any()
-        if curr_yc > 0 and was_neg: 
-            scores['Yield Curve'] = 1
-            logic['Yield Curve'] = "The 'Trap': Curve re-steepened after inversion. Historical signal for recession onset."
-        elif curr_yc < 0: 
-            scores['Yield Curve'] = 5
-            logic['Yield Curve'] = "Currently inverted. Market is pricing in future economic slowing."
-        else: 
-            scores['Yield Curve'] = 10
-            logic['Yield Curve'] = "Normal positive curve. Healthy economic expansion environment."
         
-        # 2. Credit (HYG/IEF)
-        hyg = self.get_px('HYG', 150); ief = self.get_px('IEF', 150)
-        ratio = hyg / ief; ma50 = ratio.rolling(50).mean()
-        is_safe = float(ratio.iloc[-1]) > float(ma50.iloc[-1])
-        scores['Credit Market'] = 10 if is_safe else 1
-        logic['Credit Market'] = "Measures Junk Bonds vs Safe Treasuries. Risk is ON when HYG outperforms IEF."
+        # 1. MACO: Yield Curve (With Recession Watch Lag)
+        yc_score, yc_curr, yc_warn = self.get_yc_analysis()
+        scores['Macro: Yield Curve'] = yc_score
         
-        # 3. Trend (SPY 200MA)
-        spy = self.get_px('SPY', 350); ma200 = spy.rolling(200).mean()
-        is_bullish = float(spy.iloc[-1]) > float(ma200.iloc[-1])
-        scores['Market Trend'] = 10 if is_bullish else 1
-        logic['Market Trend'] = "The 'Ultimate Filter'. Bullish if price is above the 200-Day Moving Average."
+        # 2. MACRO: Primary Trend (SPY 200MA)
+        spy = self.get_px('SPY', 350); spy_ma = spy.rolling(200).mean()
+        spy_curr = float(spy.iloc[-1])
+        scores['Macro: Global Trend'] = 10 if spy_curr > float(spy_ma.iloc[-1]) else 1
+        
+        # 3. INTERMEDIATE: Broad Breadth (11 Sectors)
+        sectors = ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE']
+        above_200 = 0
+        for s in sectors:
+            px = self.get_px(s, 250)
+            if not px.empty and px.iloc[-1] > px.rolling(200).mean().iloc[-1]: above_200 += 1
+        breadth_score = (above_200 / len(sectors)) * 10
+        # Counter-cyclical scoring
+        if breadth_score <= 2: scores['Intermediate: Breadth'] = 10 # Washout
+        elif breadth_score >= 8: scores['Intermediate: Breadth'] = 3 # Overbought Warning
+        else: scores['Intermediate: Breadth'] = 7
+        
+        # 4. TACTICAL: Volatility (VIX Snapback)
+        vix = self.get_px('^VIX', 50); v_ma = vix.rolling(20).mean(); v_std = vix.rolling(20).std()
+        v_upper = v_ma + (2 * v_std); v_now = float(vix.iloc[-1]); v_prev = float(vix.iloc[-2])
+        if v_prev > float(v_upper.iloc[-2]) and v_now < float(v_upper.iloc[-1]): scores['Tactical: Volatility'] = 10
+        elif v_now < float(v_ma.iloc[-1] - (2*v_std.iloc[-1])): scores['Tactical: Volatility'] = 2
+        else: scores['Tactical: Volatility'] = 5
 
-        # 4. VIX Snapback
-        vix = self.get_px('^VIX', 50); ma20 = vix.rolling(20).mean(); std20 = vix.rolling(20).std()
-        upper = ma20 + (2 * std20); lower = ma20 - (2 * std20)
-        v_now = float(vix.iloc[-1]); v_prev = float(vix.iloc[-2])
-        if (v_prev > float(upper.iloc[-2])) and (v_now < float(upper.iloc[-1])):
-            scores['Volatility'] = 10
-            logic['Volatility'] = "Panic Peak Detected: VIX is falling back inside its bands after a spike. Historical Buy signal."
-        elif v_now < float(lower.iloc[-1]):
-            scores['Volatility'] = 2
-            logic['Volatility'] = "Extreme Complacency: VIX is at floor levels. Risk of a sudden spike is high."
-        else:
-            scores['Volatility'] = 6
-            logic['Volatility'] = "VIX is stable within normal ranges."
-
-        # 5. Breadth
-        leaders = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'JPM']
-        above = 0
-        for t in leaders:
-            p = self.get_px(t, 60)
-            if not p.empty and p.iloc[-1] > p.rolling(50).mean().iloc[-1]: above += 1
-        b_pct = (above / len(leaders)) * 10
-        logic['Breadth'] = f"Percentage of leaders above 50-MA. Extreme low ({b_pct:.0f}) = Washout Buy. Extreme high = Overbought."
-        if b_pct <= 2: scores['Breadth'] = 10
-        elif b_pct >= 8: scores['Breadth'] = 2
-        else: scores['Breadth'] = 7
-
-        # 6. Exhaustion (DeMark)
-        counts = (spy > spy.shift(4)).astype(int); last_v = counts.iloc[-1]; c = 0
-        for val in reversed(counts.tolist()):
+        # 5. TACTICAL: Exhaustion (DeMark SPY)
+        dm = (spy > spy.shift(4)).astype(int); last_v = dm.iloc[-1]; c = 0
+        for val in reversed(dm.tolist()):
             if val == last_v: c += 1
             else: break
-        logic['Exhaustion'] = f"Sequential closing trends. Currently on a Day {c} { 'Upside' if last_v == 1 else 'Downside' } count."
-        if c >= 8 and last_v == 0: scores['Exhaustion'] = 10
-        elif c >= 8 and last_v == 1: scores['Exhaustion'] = 1
-        else: scores['Exhaustion'] = 5
+        if c >= 8 and last_v == 0: scores['Tactical: Exhaustion'] = 10
+        elif c >= 8 and last_v == 1: scores['Tactical: Exhaustion'] = 1
+        else: scores['Tactical: Exhaustion'] = 5
 
-        total_score = sum(scores.values()) / len(scores)
-        if total_score >= 8.5: alloc = 100
-        elif total_score >= 7: alloc = 80
-        elif total_score >= 5.5: alloc = 60
-        elif total_score >= 4.5: alloc = 40
-        else: alloc = 15
+        # FINAL ALLOCATION
+        avg = sum(scores.values()) / len(scores)
+        if avg >= 8.5: alloc = 100
+        elif avg >= 7: alloc = 75
+        elif avg >= 5.5: alloc = 50
+        elif avg >= 4: alloc = 25
+        else: alloc = 0
 
-        return scores, logic, total_score, alloc, float(spy.iloc[-1])
+        return scores, avg, alloc, spy_curr, yc_curr, yc_warn
 
+# --- UI EXECUTION ---
 def main():
-    engine = ProEngine()
-    scores, logic, avg_score, alloc, spy_px = engine.calculate_all()
+    engine = AlphaEngine()
+    with st.spinner('Accessing Alpha Terminal...'):
+        scores, avg, alloc, spy_px, yc_val, yc_warn = engine.run_alpha_model()
 
-    st.write(f"### 🛡️ Institutional Allocation Dashboard")
-    st.caption(f"Last Scan: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data: Yahoo Finance & St. Louis FRED")
+    # --- TOP LEVEL HEADER ---
+    st.markdown("<h1 style='text-align: left; font-size: 1.2rem; color: #8b949e; margin-bottom: 20px;'>PORTFOLIO STRATEGY & RISK OVERSIGHT</h1>", unsafe_allow_html=True)
     
-    st.divider()
-    col_a, col_b = st.columns([1.2, 2])
+    col_main_1, col_main_2 = st.columns([1, 2])
     
-    with col_a:
+    with col_main_1:
         st.markdown(f"""
-            <div class="allocation-box">
-                <p style="font-size: 0.9rem; opacity: 0.8; margin-bottom:0;">RECOMENDED CAPITAL EXPOSURE</p>
-                <h1 style="font-size: 4rem; margin: 10px 0;">{alloc}%</h1>
-                <p style="font-size: 1rem; font-weight: 600; letter-spacing: 1px;">{
-                    'AGGRESSIVE OPPORTUNITY' if alloc >= 80 else 'CORE OFFENSIVE' if alloc >= 60 else 'NEUTRAL / CAUTION' if alloc >= 40 else 'PROTECTIVE / DEFENSIVE'
-                }</p>
+            <div class="glow-box">
+                <p class="macro-header">Target Exposure</p>
+                <div class="allocation-value">{alloc}%</div>
+                <p style="margin-top: 15px; color: {'#39d353' if alloc >= 75 else '#f85149' if alloc <= 25 else '#e3b341'}; font-weight: 700;">
+                    { 'RISK-ON: AGGRESSIVE' if alloc >= 75 else 'RISK-OFF: CAPITAL PRESERVATION' if alloc <= 25 else 'NEUTRAL: TACTICAL HEDGING' }
+                </p>
             </div>
         """, unsafe_allow_html=True)
-        st.info("💡 Start scaling out as the score drops below 5.0. Scale in aggressively on 'Volatility' or 'Exhaustion' 10s.")
 
-    with col_b:
+    with col_main_2:
         fig = go.Figure(go.Indicator(
-            mode = "gauge+number", value = avg_score,
+            mode = "gauge+number", value = avg,
             gauge = {
-                'axis': {'range': [1, 10], 'tickwidth': 1},
-                'bar': {'color': "#1e3a8a"},
+                'axis': {'range': [1, 10], 'tickcolor': "#30363d"},
+                'bar': {'color': "#58a6ff"},
+                'bgcolor': "#161b22",
                 'steps': [
-                    {'range': [1, 4.5], 'color': "#fee2e2"},
-                    {'range': [4.5, 7], 'color': "#fef3c7"},
-                    {'range': [7, 10], 'color': "#dcfce7"}
+                    {'range': [1, 4], 'color': "#3e1c1c"},
+                    {'range': [4, 7], 'color': "#3e3a1c"},
+                    {'range': [7, 10], 'color': "#1c3e24"}
                 ],
             }
         ))
-        fig.update_layout(height=300, margin=dict(l=30, r=30, t=30, b=0))
+        fig.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=10), paper_bgcolor='rgba(0,0,0,0)', font={'color': "#8b949e"})
         st.plotly_chart(fig, use_container_width=True)
 
-    st.write("### Internal Logic & Rankings")
-    rows = [st.columns(3), st.columns(3)]
-    items = list(scores.items())
+    # --- THE CORE TERMINAL ---
+    st.divider()
     
-    for i, (name, val) in enumerate(items):
-        with rows[i // 3][i % 3]:
-            tag_color = "#dcfce7" if val >= 7 else "#fef3c7" if val >= 4.5 else "#fee2e2"
-            text_color = "#166534" if val >= 7 else "#92400e" if val >= 4.5 else "#991b1b"
-            
+    # 1. MACO REGIME SECTION
+    st.markdown("<p class="macro-header">Section I: Macro Regime & Systemic Risk</p>", unsafe_allow_html=True)
+    m1, m2 = st.columns(2)
+    
+    with m1:
+        st.markdown(f"""
+            <div class="card">
+                <p style="color: #8b949e; font-size: 0.7rem;">YIELD CURVE RECESSION WATCH</p>
+                <h3 style="margin:0;">{yc_val:.2f}%</h3>
+                <p style="color: {'#f85149' if yc_warn else '#39d353'}; font-size: 0.8rem;">
+                    {'⚠️ WARNING: POST-INVERSION STEEPENING' if yc_warn and yc_val > 0 else 'STABLE' if yc_val > 0 else 'INVERTED: ECONOMIC STRESS'}
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with m2:
+        st.markdown(f"""
+            <div class="card">
+                <p style="color: #8b949e; font-size: 0.7rem;">GLOBAL EQUITY TREND (SPY 200MA)</p>
+                <h3 style="margin:0;">${spy_px:.2f}</h3>
+                <p style="color: #8b949e; font-size: 0.8rem;">Long-term structural bias is {'BULLISH' if scores['Macro: Global Trend'] == 10 else 'BEARISH'}</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+    # 2. TACTICAL SECTION
+    st.markdown("<p class="macro-header">Section II: Tactical Timing & Execution</p>", unsafe_allow_html=True)
+    t1, t2, t3 = st.columns(3)
+    
+    tactical_items = [
+        ("Market Breadth", "Intermediate: Breadth", "Whole-market sector participation."),
+        ("Volatility (VIX)", "Tactical: Volatility", "Panic-reversal snapback logic."),
+        ("Exhaustion", "Tactical: Exhaustion", "DeMark sequential reversal count.")
+    ]
+    
+    for i, (label, key, desc) in enumerate(tactical_items):
+        with [t1, t2, t3][i]:
+            val = scores[key]
+            color = "#39d353" if val >= 7 else "#f85149" if val <= 3 else "#e3b341"
             st.markdown(f"""
-                <div class="metric-card">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                        <p style="color: #64748b; font-weight: 700; font-size: 0.8rem;">{name.upper()}</p>
-                        <span class="status-tag" style="background-color: {tag_color}; color: {text_color};">SCORE: {val}/10</span>
-                    </div>
-                    <p class="logic-text">{logic[name]}</p>
-                    <div style="height: 4px; width: 100%; background-color: #f1f5f9; border-radius: 10px; margin-top: 15px;">
-                        <div style="height: 4px; width: {val*10}%; background-color: {text_color}; border-radius: 10px;"></div>
-                    </div>
+                <div class="card">
+                    <p style="color: #8b949e; font-size: 0.7rem;">{label.upper()}</p>
+                    <h2 style="margin:0; color: {color};">{val}/10</h2>
+                    <p style="color: #6e7681; font-size: 0.75rem; margin-top: 10px;">{desc}</p>
                 </div>
             """, unsafe_allow_html=True)
-
-    with st.expander("📚 View Complete Methodology"):
-        st.write("""
-        - **Yield Curve:** We track the 10-Year minus 2-Year Treasury spread. The 'Trap' occurs when the curve moves from negative back to positive, which historically precedes recessions by 0-6 months.
-        - **Credit Canary:** Uses the ratio of HYG (High Yield) to IEF (7-10yr Treasuries). If the ratio is above its 50-day average, bond traders are 'Risk-On'.
-        - **VIX Snapback:** We look for the VIX to close above its 2-standard deviation upper Bollinger Band and then close back inside. This marks a peak in panic.
-        - **Breadth:** We check Apple, Microsoft, Nvidia, Google, Amazon, Meta, Tesla, and JPM. If only 0-2 are above their 50-day average, the market is 'washed out'.
-        - **DeMark Exhaustion:** Compares today's close to the close 4 days ago. 9 consecutive days of the same trend usually indicates a reversal is imminent.
-        """)
 
 if __name__ == "__main__":
     main()
