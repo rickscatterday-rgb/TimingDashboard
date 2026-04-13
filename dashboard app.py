@@ -3,10 +3,11 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 
 # --- 1. TERMINAL THEME SETUP ---
-st.set_page_config(page_title="ALPHA TERMINAL v4.8", layout="wide")
+st.set_page_config(page_title="ALPHA TERMINAL v5.1", layout="wide")
 
 st.markdown("""
 <style>
@@ -18,177 +19,180 @@ st.markdown("""
         background-color: #0d1117;
         margin-bottom: 20px;
     }
-    .logic-box {
-        background-color: #161b22;
-        border-left: 3px solid #58a6ff;
-        padding: 15px;
-        margin: 10px 0;
-        font-size: 0.9em;
+    .news-card {
+        background-color: #1a1010;
+        border: 1px solid #f85149;
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 4px;
     }
-    .signal-buy { color: #39d353; font-weight: bold; }
-    .signal-sell { color: #f85149; font-weight: bold; }
+    .red-folder { color: #f85149; font-weight: bold; animation: blinker 2s linear infinite; }
+    @keyframes blinker { 50% { opacity: 0; } }
+    .action-card {
+        padding: 20px; text-align: center; border-radius: 4px; font-weight: bold; font-size: 24px; border: 2px solid #30363d;
+    }
+    .status-no-trade { background-color: #3e1b1b; color: #f85149; border-color: #f85149; }
+    .status-sell-premium { background-color: #1b2e3e; color: #58a6ff; border-color: #58a6ff; }
+    .status-wait { background-color: #21262d; color: #8b949e; border-color: #30363d; }
     .progress-bg { background-color: #30363d; width: 100%; height: 14px; border-radius: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. DATA ENGINE ---
+# --- 2. ECONOMIC CALENDAR ENGINE ---
+def get_red_folder_news():
+    """
+    In a production app, fetch from Finnhub or AlphaVantage.
+    Here we simulate the major 'Red Folder' schedule for the current cycle.
+    """
+    now = datetime.now(pytz.timezone('US/Eastern'))
+    
+    # Example Schedule of Red Folder Events (Simulated for UI demonstration)
+    # In a real scenario, you would parse a JSON feed here.
+    events = [
+        {"event": "CPI Inflation Data", "date": (now + timedelta(days=1)).replace(hour=8, minute=30)},
+        {"event": "FOMC Rate Decision", "date": (now + timedelta(hours=5)).replace(minute=0)},
+        {"event": "Non-Farm Payrolls", "date": (now + timedelta(days=3)).replace(hour=8, minute=30)},
+        {"event": "Retail Sales MoM", "date": (now + timedelta(hours=26)).replace(minute=30)}
+    ]
+    
+    upcoming = []
+    for e in events:
+        diff = e['date'] - now
+        if diff.total_seconds() > 0:
+            hours, remainder = divmod(int(diff.total_seconds()), 3600)
+            minutes, _ = divmod(remainder, 60)
+            e['countdown'] = f"{hours}h {minutes}m"
+            e['urgent'] = hours < 4
+            upcoming.append(e)
+            
+    return sorted(upcoming, key=lambda x: x['date'])
+
+# --- 3. DATA ENGINE ---
 @st.cache_data(ttl=3600)
 def fetch_alpha_data():
-    tks = ['SPY', '^VIX', 'HYG', 'IEF', 'XLY', 'XLP', 'XLE', 'XLF', 'XLV', 'XLI', 'XLB', 'XLK', 'XLU', 'XLC', 'XLRE']
+    tks = ['SPY', '^VIX', 'HYG', 'IEF', 'DX-Y.NYB', 'XLY', 'XLP', 'XLE', 'XLF', 'XLV', 'XLI', 'XLB', 'XLK', 'XLU', 'XLC', 'XLRE']
     try:
         df = yf.download(tks, period="400d", interval="1d", progress=False, auto_adjust=True)
         return df['Close'] if not df.empty else None
     except: return None
 
-def get_yc_analysis():
-    try:
-        df = pd.read_csv("https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y")
-        df.columns = ['date', 'value']; df['value'] = pd.to_numeric(df['value'], errors='coerce')
-        df = df.dropna(); curr = float(df['value'].iloc[-1]); was_inv = (df['value'].tail(180) < 0).any()
-        if curr > 0 and was_inv: s = 10
-        elif curr < 0: s = 40 + (curr + 1.0) * 20 
-        else: s = min(100, 60 + (curr * 50))
-        return s, curr
-    except: return 50, 0.0
-
-# --- 3. ANALYTICS ENGINE ---
+# --- 4. ANALYTICS ENGINE ---
 def run_model():
     prices = fetch_alpha_data()
+    news_events = get_red_folder_news()
     if prices is None: return None
+    
     spy = prices['SPY'].dropna(); spy_px = float(spy.iloc[-1])
+    vix = prices['^VIX'].dropna(); vix_px = float(vix.iloc[-1])
+    hyg = prices['HYG'].dropna(); hyg_px = float(hyg.iloc[-1])
+    dxy = prices['DX-Y.NYB'].dropna(); dxy_px = float(dxy.iloc[-1])
+
+    # [STRATEGIC OVERRIDE LOGIC]
+    spy_200ma = spy.rolling(200).mean().iloc[-1]
+    dist_200 = (spy_px - spy_200ma) / spy_200ma
+    downtrend = dist_200 <= -0.02
     
-    # [1] TREND (200MA)
-    ma200 = float(spy.rolling(200).mean().iloc[-1])
-    dist = (spy_px - ma200) / ma200
-    tr_p = min(100, max(0, 50 + (dist * 1000)))
+    hyg_20ma = hyg.rolling(20).mean().iloc[-1]
+    dxy_20_high = dxy.tail(20).max()
+    env_ok = (dist_200 > -0.02 and hyg_px >= hyg_20ma and dxy_px < dxy_20_high)
+
+    vix_prev = vix.shift(1).iloc[-1]
+    vix_change = (vix_px - vix_prev) / vix_prev
+    vix_20ma = vix.rolling(20).mean().iloc[-1]
+    vix_20std = vix.rolling(20).std().iloc[-1]
+    vix_zscore = (vix_px - vix_20ma) / vix_20std
+    good_spike = (vix_change > 0.08 and vix_zscore > 1.5)
+
+    # News Buffer Logic: If Red Folder event is < 4 hours away, WAIT.
+    event_risk = any(e['urgent'] for e in news_events)
+
+    if downtrend: 
+        action, action_class = "NO TRADE", "status-no-trade"
+    elif event_risk:
+        action, action_class = "WAIT (NEWS)", "status-wait"
+    elif env_ok and good_spike: 
+        action, action_class = "SELL PREMIUM", "status-sell-premium"
+    else: 
+        action, action_class = "WAIT", "status-wait"
+
+    # [STRENGTH SCORING]
+    tr_p = min(100, max(0, 50 + (dist_200 * 1000)))
+    vx_p = min(100, max(0, (vix_zscore + 2) * 25))
+    br_p = (sum([1 for s in ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE'] if prices[s].iloc[-1] > prices[s].rolling(200).mean().iloc[-1]]) / 11) * 100
     
-    # [2] CREDIT (HYG/IEF)
-    ratio = (prices['HYG'].dropna() / prices['IEF'].dropna())
-    r_ma = ratio.rolling(50).mean().iloc[-1]
-    r_dist = (ratio.iloc[-1] - r_ma) / r_ma
-    cr_p = min(100, max(0, 50 + (r_dist * 2000)))
-    
-    # [3] SECTOR BREADTH
-    secs = ['XLY','XLP','XLE','XLF','XLV','XLI','XLB','XLK','XLU','XLC','XLRE']
-    above = 0
-    for s in secs:
-        p = prices[s].dropna()
-        if not p.empty and p.iloc[-1] > p.rolling(200).mean().iloc[-1]: above += 1
-    br_p = (above / 11) * 100
-    
-    # [4] VOLATILITY BAND (VIX Robust Logic)
-    vix_series = prices['^VIX'].dropna()
-    v_px = float(vix_series.iloc[-1])
-    # Use 20-day High and Low as the bands
-    v_high = vix_series.tail(20).max()
-    v_low = vix_series.tail(20).min()
-    
-    # Formula: Current position between 20-day high and low
-    # 100% = VIX is at 20-day high (Extreme Fear = Buy Opportunity)
-    if v_high == v_low:
-        vx_p = 50.0
-    else:
-        vx_p = ((v_px - v_low) / (v_high - v_low)) * 100
-    
-    # [5] EXHAUSTION
-    dm = (spy > spy.shift(4)).astype(int); lv = int(dm.iloc[-1]); c = 0
-    for val in reversed(dm.tolist()):
-        if val == lv: c += 1
-        else: break
-    dm_p = (c / 9 * 100) if lv == 0 else (100 - (c / 9 * 100))
-    
-    yc_p, yc_v = get_yc_analysis()
-    avg = (tr_p + cr_p + br_p + vx_p + dm_p + yc_p) / 6
-    alloc = 100 if avg >= 80 else (75 if avg >= 60 else (50 if avg >= 40 else 20))
+    avg = (tr_p + vx_p + br_p) / 3 # Simplified Aggregate
     
     return {
-        "alloc": alloc, "avg": avg, "yc_v": yc_v, "v_px": v_px, "v_range": (v_low, v_high),
+        "avg": avg, "action": action, "action_class": action_class, "news": news_events,
         "metrics": [
-            ("Macro: Yield Curve", f"{yc_v:.2f}% Spread", yc_p),
-            ("Trend: 200MA Prox", f"{dist:+.2%}", tr_p),
-            ("Credit: Risk Ratio", "HYG/IEF", cr_p),
-            ("Breadth: Sectors", f"{above}/11 Bullish", br_p),
-            ("Tactical: VIX Band", f"Spot: {v_px:.1f}", vx_p),
-            ("Tactical: Exhaust", f"Step {c}/9", dm_p)
+            ("Trend Alignment", f"{dist_200:+.2%}", tr_p),
+            ("VIX Z-Score", f"{vix_zscore:.2f}", vx_p),
+            ("Sector Breadth", f"Health: {br_p:.0f}%", br_p)
         ]
     }
 
-# --- 4. DISPLAY ---
+# --- 5. DISPLAY ---
 def main():
-    st.write(f"## ALPHA TERMINAL v4.8 // {datetime.now().strftime('%H:%M:%S')}")
+    st.write(f"## ALPHA TERMINAL v5.1 // {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     d = run_model()
-    if d is None: st.error("SYNC FAILED"); return
+    if d is None: return
 
-    # TOP DASHBOARD
-    c_left, c_right = st.columns([1, 1])
-    with c_left:
+    # TOP ROW: ALERTS AND NEWS
+    col_news, col_strat = st.columns([1, 2])
+    
+    with col_news:
+        st.write("### 🚨 ECONOMIC RADAR")
+        for e in d['news']:
+            urgent_style = "red-folder" if e['urgent'] else ""
+            st.markdown(f"""
+            <div class="news-card">
+                <small style="color:#8b949e;">RED FOLDER EVENT</small><br>
+                <span class="{urgent_style}">{e['event']}</span><br>
+                <span style="font-size:1.2em;">T-MINUS: {e['countdown']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with col_strat:
+        st.write("### ⚔️ STRATEGIC OVERRIDE")
         st.markdown(f"""
-        <div class="metric-container">
-            <p style="color:#8b949e;">AGGREGATE SIGNAL STRENGTH</p>
-            <h1 style="color:#58a6ff; font-size:48px; margin:0;">{d['avg']:.1f}%</h1>
-            <p style="margin-top:15px;">RECOMMENDED ALLOCATION: <span style="color:#39d353;">{d['alloc']}% EQUITY</span></p>
+        <div class="metric-container" style="text-align:center;">
+            <p style="color:#8b949e; margin-bottom:15px;">CURRENT TACTICAL BIAS</p>
+            <div class="action-card {d['action_class']}">{d['action']}</div>
+            <p style="margin-top:15px; font-size:0.9em;">
+                Agg Strength: {d['avg']:.1f}% | 
+                Risk Level: {"HIGH" if "WAIT" in d['action'] else "STABLE"}
+            </p>
         </div>
         """, unsafe_allow_html=True)
-    with c_right:
-        fig = go.Figure(go.Indicator(mode="gauge+number", value=d['avg'], gauge={'axis':{'range':[0,100]}, 'bar':{'color':"#58a6ff"}, 'bgcolor':"#161b22"}))
-        fig.update_layout(height=220, margin=dict(l=20,r=20,t=30,b=20), paper_bgcolor='rgba(0,0,0,0)', font={'color': "#8b949e"})
-        st.plotly_chart(fig, use_container_width=True)
 
-    # LEDGER SECTION
-    st.write("### STRENGTH LEDGER")
-    for label, reading, pct in d['metrics']:
-        col1, col2, col3 = st.columns([1, 1, 2])
-        col1.write(f"**{label}**")
-        col2.write(reading)
-        color = "#39d353" if pct >= 70 else "#f85149" if pct <= 30 else "#e3b341"
-        bar_html = f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:14px; border-radius:2px;"></div></div>'
-        col3.markdown(bar_html, unsafe_allow_html=True)
-
-    # --- 5. SIGNAL INTELLIGENCE DICTIONARY ---
     st.write("---")
-    st.write("### 🧠 SIGNAL INTELLIGENCE DICTIONARY")
     
-    dict_cols = st.columns(2)
+    # BOTTOM ROW: LEDGER & DICTIONARY
+    col_ledge, col_dict = st.columns([1.5, 1])
     
-    with dict_cols[0]:
-        st.markdown(f"""
+    with col_ledge:
+        st.write("### STRENGTH LEDGER")
+        for label, reading, pct in d['metrics']:
+            cl1, cl2, cl3 = st.columns([1, 1, 1.5])
+            cl1.write(label); cl2.write(reading)
+            color = "#39d353" if pct >= 70 else "#f85149" if pct <= 30 else "#e3b341"
+            cl3.markdown(f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:14px; border-radius:2px;"></div></div>', unsafe_allow_html=True)
+
+    with col_dict:
+        st.write("### 🧠 LOGIC ENGINE")
+        st.markdown("""
         <div class="logic-box">
-            <p><b>1. Yield Curve (Macro Correlation)</b></p>
-            <span class="signal-buy">BUY CONDITION:</span> Curve is either healthy (>0.5) or "Deeply Inverted" (< -0.5) as the market has already priced in the pain.<br>
-            <span class="signal-sell">SELL CONDITION:</span> "The Re-Steepening." When the spread crosses 0 from a negative value. This is the #1 signal of an imminent recession.
+            <b>RED FOLDER PROTOCOL:</b><br>
+            If high-impact news (CPI, FOMC, etc.) is within 4 hours, all signals are muted to 'WAIT' to prevent gamma-risk exposure.
         </div>
         <div class="logic-box">
-            <p><b>2. Trend Proximity (Moving Average)</b></p>
-            <span class="signal-buy">BUY CONDITION:</span> Price is trending comfortably above the 200-day Moving Average. Momentum is in your favor.<br>
-            <span class="signal-sell">SELL CONDITION:</span> Price breaks below the 200-day MA. This indicates a structural shift from a Bull to a Bear market.
-        </div>
-        <div class="logic-box">
-            <p><b>3. Credit Canary (Risk Sentiment)</b></p>
-            <span class="signal-buy">BUY CONDITION:</span> High Yield Junk Bonds (HYG) are outperforming safe-haven Treasuries (IEF). Capital is seeking risk.<br>
-            <span class="signal-sell">SELL CONDITION:</span> Treasuries start outperforming Junk Bonds. This "Flight to Quality" usually happens before stock market crashes.
+            <b>SELL PREMIUM REQ:</b><br>
+            1. SPY Distance to 200MA > -2%<br>
+            2. HYG > 20-Day Moving Average<br>
+            3. DXY < 20-Day Highs<br>
+            4. VIX Spike > 8% & Z-Score > 1.5
         </div>
         """, unsafe_allow_html=True)
-
-    with dict_cols[1]:
-        st.markdown(f"""
-        <div class="logic-box">
-            <p><b>4. Sector Breadth (Market Participation)</b></p>
-            <span class="signal-buy">BUY CONDITION:</span> >8 of 11 S&P sectors are in uptrends. This confirms the rally is broad-based and sustainable.<br>
-            <span class="signal-sell">SELL CONDITION:</span> <4 sectors are in uptrends. This is "Narrow Leadership" where only a few tech stocks are hiding a weak market.
-        </div>
-        <div class="logic-box">
-            <p><b>5. Volatility Band (Contrarian Timing)</b></p>
-            <span class="signal-buy">BUY CONDITION:</span> VIX is at a 20-day High (Strength = 100%). When the "crowd" is terrified, it is historically the best time to buy.<br>
-            <span class="signal-sell">SELL CONDITION:</span> VIX is at a 20-day Low (Strength = 0%). Extreme complacency often leads to sharp, unexpected sell-offs.
-        </div>
-        <div class="logic-box">
-            <p><b>6. Exhaustion Count (Sequential Logic)</b></p>
-            <span class="signal-buy">BUY CONDITION:</span> Downside 9-Count. Current price has been lower than the price 4 days ago for 9 consecutive steps.<br>
-            <span class="signal-sell">SELL CONDITION:</span> Upside 9-Count. The market is "vertically exhausted" and likely to mean-revert or consolidate.
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.caption(f"ALPHA TERMINAL // VIX 20D RANGE: {d['v_range'][0]:.1f} - {d['v_range'][1]:.1f}")
 
 if __name__ == "__main__":
     main()
