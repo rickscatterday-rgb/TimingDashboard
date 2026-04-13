@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- 1. TERMINAL THEME SETUP ---
-st.set_page_config(page_title="ALPHA TERMINAL v5.4", layout="wide")
+st.set_page_config(page_title="ALPHA TERMINAL v5.5", layout="wide")
 
 st.markdown("""
 <style>
@@ -26,6 +26,8 @@ st.markdown("""
         margin-bottom: 10px;
         border-radius: 4px;
     }
+    .market-open { color: #39d353; font-weight: bold; }
+    .market-closed { color: #f85149; font-weight: bold; }
     .red-folder { color: #f85149; font-weight: bold; animation: blinker 2s linear infinite; }
     @keyframes blinker { 50% { opacity: 0; } }
     .action-card {
@@ -34,30 +36,41 @@ st.markdown("""
     .status-no-trade { background-color: #3e1b1b; color: #f85149; border-color: #f85149; }
     .status-sell-premium { background-color: #1b2e3e; color: #58a6ff; border-color: #58a6ff; }
     .status-wait { background-color: #21262d; color: #8b949e; border-color: #30363d; }
-    .logic-box { 
-        background-color: #161b22; 
-        border-left: 3px solid #58a6ff; 
-        padding: 15px; 
-        margin: 10px 0; 
-        font-size: 0.85em;
-        line-height: 1.4;
-    }
+    .logic-box { background-color: #161b22; border-left: 3px solid #58a6ff; padding: 15px; margin: 10px 0; font-size: 0.85em; }
     .signal-buy { color: #39d353; font-weight: bold; }
     .signal-sell { color: #f85149; font-weight: bold; }
     .progress-bg { background-color: #30363d; width: 100%; height: 14px; border-radius: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. ECONOMIC NEWS ENGINE ---
+# --- 2. MARKET STATUS & NEWS ENGINE ---
+def get_market_status():
+    tz = pytz.timezone('US/Eastern')
+    now = datetime.now(tz)
+    # Weekends
+    if now.weekday() >= 5:
+        return "CLOSED (WEEKEND)", "market-closed"
+    # Market Hours: 9:30 AM - 4:00 PM ET
+    open_time = now.replace(hour=9, minute=30, second=0)
+    close_time = now.replace(hour=16, minute=0, second=0)
+    if open_time <= now <= close_time:
+        return "MARKET OPEN", "market-open"
+    return "MARKET CLOSED", "market-closed"
+
 def get_red_folder_events():
-    now = datetime.now(pytz.timezone('US/Eastern'))
-    events = [
-        {"event": "FOMC Interest Rate Decision", "date": (now + timedelta(hours=4)).replace(minute=0)},
-        {"event": "CPI Inflation Data", "date": (now + timedelta(hours=18)).replace(minute=30)},
-        {"event": "Non-Farm Payrolls", "date": (now + timedelta(hours=42)).replace(minute=30)}
+    tz = pytz.timezone('US/Eastern')
+    now = datetime.now(tz)
+    
+    # ACTUAL JANUARY 2025 HIGH IMPACT SCHEDULE
+    events_list = [
+        {"event": "Non-Farm Payrolls (NFP)", "date": datetime(2025, 1, 10, 8, 30, tzinfo=tz)},
+        {"event": "CPI Inflation Data", "date": datetime(2025, 1, 15, 8, 30, tzinfo=tz)},
+        {"event": "Retail Sales", "date": datetime(2025, 1, 15, 8, 30, tzinfo=tz)},
+        {"event": "FOMC Rate Decision", "date": datetime(2025, 1, 29, 14, 0, tzinfo=tz)},
     ]
+    
     upcoming = []
-    for e in events:
+    for e in events_list:
         diff = e['date'] - now
         if diff.total_seconds() > 0:
             h, r = divmod(int(diff.total_seconds()), 3600)
@@ -65,7 +78,8 @@ def get_red_folder_events():
             e['countdown'] = f"{h}h {m}m"
             e['urgent'] = h < 4
             upcoming.append(e)
-    return sorted(upcoming, key=lambda x: x['date'])
+            
+    return sorted(upcoming, key=lambda x: x['date'])[:3] # Show next 3
 
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=3600)
@@ -97,7 +111,7 @@ def run_model():
     hyg = prices['HYG'].dropna(); hyg_px = float(hyg.iloc[-1])
     dxy = prices['DX-Y.NYB'].dropna(); dxy_px = float(dxy.iloc[-1])
 
-    # [A] YOUR SPECIFIC TACTICAL LOGIC
+    # TACTICAL LOGIC
     spy_200ma = spy.rolling(200).mean().iloc[-1]
     dist_to_200 = (spy_px - spy_200ma) / spy_200ma
     downtrend = dist_to_200 <= -0.02
@@ -118,7 +132,7 @@ def run_model():
     elif env_ok and good_spike: action, a_class = "SELL PREMIUM", "status-sell-premium"
     else: action, a_class = "WAIT", "status-wait"
 
-    # [B] FULL SYSTEM METRICS
+    # METRIC SCORING
     tr_p = min(100, max(0, 50 + (dist_to_200 * 1000)))
     ratio = (prices['HYG'] / prices['IEF']).dropna()
     cr_p = min(100, max(0, 50 + ((ratio.iloc[-1] / ratio.rolling(50).mean().iloc[-1]) - 1) * 2000))
@@ -157,14 +171,18 @@ def run_model():
 
 # --- 5. DISPLAY ---
 def main():
-    st.write(f"## ALPHA TERMINAL v5.4 // {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    m_status, m_class = get_market_status()
+    st.write(f"## ALPHA TERMINAL v5.5 // <span class='{m_class}'>{m_status}</span>", unsafe_allow_html=True)
+    st.caption(f"SYSTEM TIME: {datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %H:%M:%S')} ET")
+    
     d = run_model()
     if d is None: return
 
     # TOP DASHBOARD
     c_news, c_action, c_gauge = st.columns([1, 1.2, 1])
     with c_news:
-        st.write("### 🚨 RED FOLDER NEWS")
+        st.write("### 🚨 RED FOLDER RADAR")
+        if not d['news']: st.info("No high-impact events remaining in Jan.")
         for e in d['news']:
             u_cls = "red-folder" if e['urgent'] else ""
             st.markdown(f'<div class="news-card"><small>HIGH IMPACT</small><br><span class="{u_cls}">{e["event"]}</span><br>T-MINUS: {e["countdown"]}</div>', unsafe_allow_html=True)
@@ -186,7 +204,7 @@ def main():
         color = "#39d353" if pct >= 70 else "#f85149" if pct <= 30 else "#e3b341"
         col3.markdown(f'<div class="progress-bg"><div style="background-color:{color}; width:{pct}%; height:14px; border-radius:2px;"></div></div>', unsafe_allow_html=True)
 
-    # --- RESTORED SIGNAL INTELLIGENCE DICTIONARY ---
+    # SIGNAL INTELLIGENCE DICTIONARY
     st.write("---")
     st.write("### 🧠 SIGNAL INTELLIGENCE DICTIONARY")
     d1, d2 = st.columns(2)
@@ -194,46 +212,25 @@ def main():
         st.markdown("""
         <div class="logic-box">
             <b>1. Tactical Decision Engine (Premium Logic)</b><br>
-            <span class="signal-buy">SELL PREMIUM:</span> Neutral Trend (> -2% from 200MA) + HYG > 20MA + DXY < 20D High + VIX Spike (>8% & 1.5 Z-Score).<br>
-            <span class="signal-sell">NO TRADE:</span> Absolute override if SPY is in a Downtrend (<= -2% from 200MA).
+            <span class="signal-buy">SELL PREMIUM:</span> Requires Neutral Trend (> -2% from 200MA) + HYG > 20MA + DXY < 20D High + VIX Spike (>8% & 1.5 Z-Score).<br>
+            <span class="signal-sell">NO TRADE:</span> SPY is in a Downtrend (<= -2% from 200MA).
         </div>
         <div class="logic-box">
             <b>2. Yield Curve (Macro Correlation)</b><br>
             <span class="signal-buy">BUY:</span> Curve > 0.5 or < -0.5. <br>
-            <span class="signal-sell">SELL:</span> "The Re-Steepening." Crossing 0.0 from negative. This is the #1 signal of an imminent recession.
-        </div>
-        <div class="logic-box">
-            <b>3. Trend Proximity (Moving Average)</b><br>
-            <span class="signal-buy">BUY:</span> Price is trending comfortably above the 200-day MA. Momentum is in your favor.<br>
-            <span class="signal-sell">SELL:</span> Price breaks below the 200-day MA. Structural trend change.
-        </div>
-        <div class="logic-box">
-            <b>4. Credit Canary (Risk Sentiment)</b><br>
-            <span class="signal-buy">BUY:</span> Junk Bonds (HYG) > Treasuries (IEF). Risk appetite is high.<br>
-            <span class="signal-sell">SELL:</span> Treasuries > Junk Bonds. Flight to safety confirmed.
+            <span class="signal-sell">SELL:</span> Crossing 0.0 from negative (Re-steepening).
         </div>
         """, unsafe_allow_html=True)
-
     with d2:
         st.markdown("""
         <div class="logic-box">
-            <b>5. Sector Breadth (Participation)</b><br>
-            <span class="signal-buy">BUY:</span> >8 of 11 sectors bullish. Participation is healthy.<br>
-            <span class="signal-sell">SELL:</span> <4 sectors bullish. Rally is thin and unsustainable.
+            <b>3. Red Folder Radar (Actual Schedule)</b><br>
+            Counts down to high-impact events (NFP, CPI, FOMC). Times are synced to US/Eastern. Events disappear automatically once passed.
         </div>
         <div class="logic-box">
-            <b>6. Volatility Z-Score (Mean Reversion)</b><br>
-            <span class="signal-buy">BUY:</span> Z-Score > 1.5. VIX is significantly higher than its 20-day mean (Panic).<br>
-            <span class="signal-sell">SELL:</span> Z-Score < -1.0. VIX is crushed (Complacency).
-        </div>
-        <div class="logic-box">
-            <b>7. RSI-14 & Exhaustion (Timing)</b><br>
-            <span class="signal-buy">BUY:</span> RSI < 30 or Downside 9-Count. Market is vertically exhausted.<br>
-            <span class="signal-sell">SELL:</span> RSI > 70 or Upside 9-Count. Market is overbought.
-        </div>
-        <div class="logic-box">
-            <b>8. Red Folder News (Event Risk)</b><br>
-            Tracks high-impact economic events. Countdown indicates time until the "Red Folder" release. Traders should be cautious 4 hours before release.
+            <b>4. Tactical Metrics:</b><br>
+            <b>VIX Z-Score:</b> Measures fear vs the 20-day mean.<br>
+            <b>RSI-14:</b> Tactical momentum extremes (Oversold/Overbought).
         </div>
         """, unsafe_allow_html=True)
 
