@@ -132,21 +132,22 @@ def run_dashboard():
 # 5. EXECUTION LOGIC
 # =============================================================================
 if __name__ == "__main__":
-    # If this is being run by a user looking at the dashboard
-    if st._is_running_with_streamlit:
+    # Check if we are running in the Streamlit Dashboard
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        if get_script_run_ctx():
+            run_dashboard()
+        else:
+            # This part runs for GitHub Automated Alerts
+            print("Running Automated Market Check...")
+            engine = RegimeBasedDashboard()
+            reg = engine.check_regime()
+            sig = engine.get_signals()
+            
+            if reg['regime'] == "OFFENSIVE" and sig['vix_buy']:
+                send_alerts(f"🟢 BUY SIGNAL: Regime is Offensive and VIX snapped back. Price: ${sig['spy_price']:.2f}")
+            elif reg['regime'] == "DEFENSIVE":
+                print("System is Defensive. No buy signals.")
+    except:
+        # Fallback for older versions or special environments
         run_dashboard()
-    
-    # If this is being run automatically by GitHub Actions (The Alerter)
-    else:
-        print("Running Automated Market Check...")
-        engine = RegimeBasedDashboard()
-        reg = engine.check_regime()
-        sig = engine.get_signals()
-        
-        # Define what triggers a text message
-        if reg['regime'] == "OFFENSIVE" and sig['vix_buy']:
-            send_alerts(f"🟢 BUY SIGNAL: Regime is Offensive and VIX snapped back. Price: ${sig['spy_price']:.2f}")
-        
-        elif reg['regime'] == "DEFENSIVE":
-            # You can decide if you want a daily text during defensive regimes
-            print("System is Defensive. No buy signals.")
